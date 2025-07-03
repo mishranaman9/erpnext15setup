@@ -131,6 +131,12 @@ if ! command_exists yarn; then
 fi
 log "Node.js $node_version and Yarn $(yarn --version) installed or verified."
 
+# intruder: check if node is installed
+if ! command_exists node; then
+    log "Error: Node.js not installed after all attempts."
+    exit 1
+fi
+
 # Step 4: Install prerequisites
 log "Installing prerequisites..."
 if ! sudo apt-get install -y \
@@ -210,7 +216,9 @@ if ! sudo systemctl restart mariadb >> "$LOG_FILE" 2>&1; then
 fi
 log "MariaDB configured and running."
 
-# Step 7: Create Frappe Bench user
+# Step 7: Create Frappe Bench
+
+ user
 log "Creating user $frappe_user..."
 if ! sudo adduser --disabled-password --gecos "" "$frappe_user" >> "$LOG_FILE" 2>&1; then
     log "Error: Failed to create user $frappe_user."
