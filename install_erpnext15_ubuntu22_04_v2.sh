@@ -75,47 +75,61 @@ if ! sudo apt-get upgrade -y >> "$LOG_FILE" 2>&1; then
 fi
 
 # Step 3: Install Node.js 18
-log "Installing Node.js 18..."
-# Attempt NodeSource repository first
-if ! curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash - >> "$LOG_FILE" 2>&1; then
-    log "Warning: Failed to set up NodeSource repository. Trying alternative method..."
-    # Fallback: Install Node.js from Ubuntu repository
-    if ! sudo apt-get install -y nodejs npm >> "$LOG_FILE" 2>&1; then
-        log "Error: Failed to install Node.js from Ubuntu repository. Trying to fix dependencies..."
-        sudo apt-get install -f -y >> "$LOG_FILE" 2>&1 || { log "Error: Could not install Node.js."; exit 1; }
+log "Checking for existing Node.js installation..."
+if command_exists node; then
+    node_version=$(node -v)
+    if [[ "$node_version" =~ ^v18\. ]]; then
+        log "Node.js $node_version already installed, skipping installation."
+    else
+        log "Error: Node.js version $node_version found, but ERPNext requires 18.x."
+        exit 1
     fi
 else
-    if ! sudo apt-get install -y nodejs >> "$LOG_FILE" 2>&1; then
-        log "Error: Failed to install Node.js from NodeSource. Trying to fix dependencies..."
-        sudo apt-get install -f -y >> "$LOG_FILE" 2>&1 || { log "Error: Could not install Node.js."; exit 1; }
-    fi
-fi
-# Update PATH to include common Node.js locations
-export PATH=$PATH:/usr/local/bin:/usr/bin:/bin:/usr/lib/node_modules
-# Verify Node.js installation
-if ! command_exists node; then
-    log "Error: Node.js not found after installation. Checking alternative paths..."
-    if [ -f /usr/local/bin/node ]; then
-        log "Node.js found in /usr/local/bin. Adding to PATH."
-        sudo ln -sf /usr/local/bin/node /usr/bin/node
+    log "Installing Node.js 18..."
+    # Attempt NodeSource repository first
+    if ! curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash - >> "$LOG_FILE" 2>&1; then
+        log "Warning: Failed to set up NodeSource repository. Trying alternative method..."
+        # Fallback: Install Node.js from Ubuntu repository
+        if ! sudo apt-get install -y nodejs npm >> "$LOG_FILE" 2>&1; then
+            log "Error: Failed to install Node.js from Ubuntu repository. Trying to fix dependencies..."
+            sudo apt-get install -f -y >> "$LOG_FILE" 2>&1 || { log "Error: Could not install Node.js."; exit 1; }
+        fi
     else
-        log "Error: Node.js installation failed. Please check $LOG_FILE for details."
+        if ! sudo apt-get install -y nodejs >> "$LOG_FILE" 2>&1; then
+            log "Error: Failed to install Node.js from NodeSource. Trying to fix dependencies..."
+            sudo apt-get install -f -y >> "$LOG_FILE" 2>&1 || { log "Error: Could not install Node.js."; exit 1; }
+        fi
+    fi
+    # Update PATH to include common Node.js locations
+    export PATH=$PATH:/usr/local/bin:/usr/bin:/bin:/usr/lib/node_modules
+    # Verify Node.js installation
+    if ! command_exists node; then
+        log "Error: Node.js not found after installation. Checking alternative paths..."
+        if [ -f /usr/local/bin/node ]; then
+            log "Node.js found in /usr/local/bin. Adding to PATH."
+            sudo ln -sf /usr/local/bin/node /usr/bin/node
+        else
+            log "Error: Node.js installation failed. Please check $LOG_FILE for details."
+            exit 1
+        fi
+    fi
+    # Verify Node.js version
+    node_version=$(node -v)
+    if [[ ! "$node_version" =~ ^v18\. ]]; then
+        log "Error: Installed Node.js version ($node_version) is not 18.x. ERPNext requires Node.js 18."
         exit 1
     fi
 fi
-# Verify Node.js version (ensure it's 18.x)
-node_version=$(node -v)
-if [[ ! "$node_version" =~ ^v18\. ]]; then
-    log "Error: Installed Node.js version ($node_version) is not 18.x. ERPNext requires Node.js 18."
-    exit 1
+# Install Yarn if not already installed
+if ! command_exists yarn; then
+    log "Installing Yarn..."
+    if ! sudo npm install -g yarn >> "$LOG_FILE" 2>&1; then
+        log "Error: Failed to install Yarn. Ensuring npm is installed..."
+        sudo apt-get install -y npm >> "$LOG_FILE" 2>&1 || { log "Error: Could not install npm."; exit 1; }
+        sudo npm install -g yarn >> "$LOG_FILE" 2>&1 || { log "Error: Could not install Yarn."; exit 1; }
+    fi
 fi
-# Install Yarn
-if ! sudo npm install -g yarn >> "$LOG_FILE" 2>&1; then
-    log "Error: Failed to install Yarn. Ensuring npm is installed..."
-    sudo apt-get install -y npm >> "$LOG_FILE" 2>&1 || { log "Error: Could not install npm."; exit 1; }
-    sudo npm install -g yarn >> "$LOG_FILE" 2>&1 || { log "Error: Could not install Yarn."; exit 1; }
-fi
-log "Node.js $node_version and Yarn $(yarn --version) installed."
+log "Node.js $node_version and Yarn $(yarn --version) installed or verified."
 
 # Step 4: Install prerequisites
 log "Installing prerequisites..."
