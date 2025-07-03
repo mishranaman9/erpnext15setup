@@ -74,7 +74,33 @@ if ! sudo apt-get upgrade -y >> "$LOG_FILE" 2>&1; then
     sudo apt-get install -f -y >> "$LOG_FILE" 2>&1 || { log "Error: Could not fix dependencies."; exit 1; }
 fi
 
-# Step 3: Install prerequisites
+# Step 3: Install Node.js 18
+log "Installing Node.js 18..."
+if ! curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash - >> "$LOG_FILE" 2>&1; then
+    log "Error: Failed to set up Node.js repository. Check network connectivity."
+    exit 1
+fi
+if ! sudo apt-get install -y nodejs >> "$LOG_FILE" 2>&1; then
+    log "Error: Failed to install Node.js. Trying to fix dependencies..."
+    sudo apt-get install -f -y >> "$LOG_FILE" 2>&1 || { log "Error: Could not install Node.js."; exit 1; }
+fi
+# Verify Node.js installation
+if ! command_exists node; then
+    log "Error: Node.js not found after installation. Checking PATH..."
+    export PATH=$PATH:/usr/local/bin:/usr/bin:/bin
+    if ! command_exists node; then
+        log "Error: Node.js still not found. Installation failed."
+        exit 1
+    fi
+fi
+if ! sudo npm install -g yarn >> "$LOG_FILE" 2>&1; then
+    log "Error: Failed to install Yarn. Trying to fix npm..."
+    sudo apt-get install -y npm >> "$LOG_FILE" 2>&1 || { log "Error: Could not install npm."; exit 1; }
+    sudo npm install -g yarn >> "$LOG_FILE" 2>&1 || { log "Error: Could not install Yarn."; exit 1; }
+fi
+log "Node.js $(node -v) and Yarn $(yarn --version) installed."
+
+# Step 4: Install prerequisites
 log "Installing prerequisites..."
 if ! sudo apt-get install -y \
     python3.10 python3.10-dev python3.10-venv python3-pip \
@@ -86,30 +112,14 @@ if ! sudo apt-get install -y \
     sudo apt-get install -f -y >> "$LOG_FILE" 2>&1 || { log "Error: Could not install prerequisites."; exit 1; }
 fi
 
-# Verify key tools
-for cmd in python3.10 node npm git redis-server nginx mariadb wkhtmltopdf; do
+# Verify key tools (excluding node, already verified)
+for cmd in python3.10 npm git redis-server nginx mariadb wkhtmltopdf; do
     if ! command_exists "$cmd"; then
         log "Error: $cmd not installed."
         exit 1
     fi
 done
 log "Prerequisites verified."
-
-# Step 4: Install Node.js 18
-log "Installing Node.js 18..."
-if ! curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash - >> "$LOG_FILE" 2>&1; then
-    log "Error: Failed to set up Node.js repository."
-    exit 1
-fi
-if ! sudo apt-get install -y nodejs >> "$LOG_LOG_FILE" 2>&1; then
-    log "Error: Failed to install Node.js. Trying to fix..."
-    sudo apt-get install -f -y >> "$LOG_FILE" 2>&1 || { log "Error: Could not install Node.js."; exit 1; }
-fi
-if ! sudo npm install -g yarn >> "$LOG_FILE" 2>&1; then
-    log "Error: Failed to install Yarn."
-    exit 1
-fi
-log "Node.js $(node -v) and Yarn $(yarn --version) installed."
 
 # Step 5: Install wkhtmltopdf with patched Qt
 log "Installing wkhtmltopdf 0.12.6.1 with patched Qt..."
