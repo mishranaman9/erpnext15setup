@@ -20,6 +20,23 @@ validate_input() {
     fi
 }
 
+# === Step 0: Fix any interrupted dpkg operations ===
+log "Checking and fixing dpkg lock or interrupted installations..."
+if [ -f /var/lib/dpkg/lock ]; then
+    log "dpkg lock file detected. Waiting for any ongoing process to complete..."
+    sleep 10
+fi
+
+sudo dpkg --configure -a || {
+    log "Failed to configure dpkg packages. Manual intervention may be needed."
+    exit 1
+}
+
+sudo apt-get install -f -y || {
+    log "Failed to fix broken dependencies with apt-get install -f."
+    exit 1
+}
+
 # === Step 1: User Prompts ===
 log "Starting ERPNext 15 Installation"
 read -rp "Enter Frappe system user (e.g., frappe): " frappe_user
