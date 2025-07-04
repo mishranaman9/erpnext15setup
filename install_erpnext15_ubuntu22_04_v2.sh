@@ -18,13 +18,51 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
-# Function to validate user input
+# Function to validate user input with retries
 validate_input() {
     local input_name="$2"
-    if [ -z "$1" ]; then
-        log "Error: $input_name cannot be empty."
-        exit 1
-    fi
+    local input_value=""
+    local attempts=3
+    local count=0
+    while [ $count -lt $attempts ]; do
+        echo "Enter $input_name:"
+        read -r input_value
+        if [ -n "$input_value" ]; then
+            echo "$input_value"
+            log "$input_name provided."
+            return
+        fi
+        count=$((count + 1))
+        log "Error: $input_name cannot be empty. Attempt $count/$attempts."
+        if [ $count -eq $attempts ]; then
+            log "Error: Failed to provide $input_name after $attempts attempts."
+            exit 1
+        fi
+    done
+}
+
+# Function to validate sensitive input (e.g., passwords) with retries
+validate_sensitive_input() {
+    local input_name="$2"
+    local input_value=""
+    local attempts=3
+    local count=0
+    while [ $count -lt $attempts ]; do
+        echo "Enter $input_name:"
+        read -s input_value
+        echo
+        if [ -n "$input_value" ]; then
+            echo "$input_value"
+            log "$input_name provided."
+            return
+        fi
+        count=$((count + 1))
+        log "Error: $input_name cannot be empty. Attempt $count/$attempts."
+        if [ $count -eq $attempts ]; then
+            log "Error: Failed to provide $input_name after $attempts attempts."
+            exit 1
+        fi
+    done
 }
 
 # Function to check if a port is in use
@@ -45,25 +83,17 @@ read -r create_new_user
 create_new_user=${create_new_user:-y}
 log "Create new user response: $create_new_user"
 if [ "$create_new_user" = "y" ] || [ "$create_new_user" = "Y" ]; then
-    echo "Enter the username for the Frappe Bench user (e.g., frappe):"
-    read -r frappe_user
-    validate_input "$frappe_user" "Frappe Bench username"
+    frappe_user=$(validate_input "frappe_user" "Frappe Bench username")
     log "Frappe Bench username entered: $frappe_user"
     if id "$frappe_user" >/dev/null 2>&1; then
         log "User $frappe_user already exists. Using existing user."
-        echo "Enter the password for existing user $frappe_user:"
-        read -s frappe_user_password
-        validate_input "$frappe_user_password" "Frappe user password"
-        echo
+        frappe_user_password=$(validate_sensitive_input "frappe_user_password" "password for existing user $frappe_user")
         if ! groups "$frappe_user" | grep -q sudo; then
             log "Adding $frappe_user to sudo group..."
             sudo usermod -aG sudo "$frappe_user" >> "$LOG_FILE" 2>&1 || { log "Error: Failed to add $frappe_user to sudo group."; exit 1; }
         fi
     else
-        echo "Enter the password for new user $frappe_user:"
-        read -s frappe_user_password
-        validate_input "$frappe_user_password" "Frappe user password"
-        echo
+        frappe_user_password=$(validate_sensitive_input "frappe_user_password" "password for new user $frappe_user")
     fi
 else
     frappe_user=$(whoami)
@@ -75,22 +105,9 @@ else
     frappe_user_password=""
 fi
 
-echo "Enter the MySQL root password to be set or existing password:"
-read -s mysql_root_password
-validate_input "$mysql_root_password" "MySQL root password"
-echo
-log "MySQL root password provided."
-
-echo "Enter the Administrator password for ERPNext:"
-read -s admin_password
-validate_input "$admin_password" "ERPNext Administrator password"
-echo
-log "ERPNext Administrator password provided."
-
-echo "Enter the site name for ERPNext (e.g., erp.mysite.com):"
-read -r site_name
-validate_input "$site_name" "Site name"
-log "Site name entered: $site_name"
+mysql_root_password=$(validate_sensitive_input "mysql_root_password" "MySQL root password to be set or existing password")
+admin_password=$(validate_sensitive_input "admin_password" "Administrator password for ERPNext")
+site_name=$(validate_input "site_name" "site name for ERPNext (e.g., erp.mysite.com)")
 
 # Check if port 80 is free
 check_port 80
@@ -110,13 +127,26 @@ if [ -d "/home/$frappe_user/.bench" ]; then
     sudo rm -rf "/home/$frappe_user/.bench"
     log "Removed existing .bench directory."
 fi
+if [ -f "wkhtmltox.deb" ]; then
+    rm wkhtmltox.deb
+    log "Removed existing wkhtmltox.deb file."
+fi
 
 # Step 3: Update system packages
 log "Updating system packages..."
-if ! sudo apt-get update -y >> "$LOG_FILE" 2>&1; then
-    log "Error: Failed to update package list. Check network connectivity or apt sources."
-    exit 1
-fi
+for attempt in {1..3}; do
+    if sudo apt-get update -y >> "$LOG_FILE" 2>&1; then
+        log "Package list updated successfully."
+        break
+    else
+        log "Warning: Failed to update package list (attempt $attempt/3). Retrying..."
+        sleep 5
+    fi
+    if [ $attempt -eq 3 ]; then
+        log "Error: Failed to update package list after 3 attempts. Check network connectivity or apt sources."
+        exit 1
+    fi
+done
 if ! sudo apt-get upgrade -y >> "$LOG_FILE" 2>&1; then
     log "Error: Failed to upgrade packages. Trying to fix broken dependencies..."
     sudo apt-get install -f -y >> "$LOG_FILE" 2>&1 || { log "Error: Could not fix dependencies."; exit 1; }
@@ -134,18 +164,19 @@ if command_exists node; then
     fi
 else
     log "Installing Node.js 18..."
-    if ! curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash - >> "$LOG_FILE" 2>&1; then
-        log "Warning: Failed to set up NodeSource repository. Trying alternative method..."
-        if ! sudo apt-get install -y nodejs npm >> "$LOG_FILE" 2>&1; then
-            log "Error: Failed to install Node.js from Ubuntu repository. Trying to fix dependencies..."
-            sudo apt-get install -f -y >> "$LOG_FILE" 2>&1 || { log "Error: Could not install Node.js."; exit 1; }
+    for attempt in {1..3}; do
+        if curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash - >> "$LOG_FILE" 2>&1 && sudo apt-get install -y nodejs >> "$LOG_FILE" 2>&1; then
+            log "Node.js installed successfully."
+            break
+        else
+            log "Warning: Failed to install Node.js (attempt $attempt/3). Retrying..."
+            sleep 5
         fi
-    else
-        if ! sudo apt-get install -y nodejs >> "$LOG_FILE" 2>&1; then
-            log "Error: Failed to install Node.js from NodeSource. Trying to fix dependencies..."
-            sudo apt-get install -f -y >> "$LOG_FILE" 2>&1 || { log "Error: Could not install Node.js."; exit 1; }
+        if [ $attempt -eq 3 ]; then
+            log "Error: Failed to install Node.js from NodeSource. Trying Ubuntu repository..."
+            sudo apt-get install -y nodejs npm >> "$LOG_FILE" 2>&1 || { log "Error: Could not install Node.js."; exit 1; }
         fi
-    fi
+    done
     export PATH=$PATH:/usr/local/bin:/usr/bin:/bin:/usr/lib/node_modules
     if ! command_exists node; then
         log "Error: Node.js not found after installation. Checking alternative paths..."
@@ -165,16 +196,26 @@ else
 fi
 if ! command_exists yarn; then
     log "Installing Yarn..."
-    if ! sudo npm install -g yarn >> "$LOG_FILE" 2>&1; then
-        log "Error: Failed to install Yarn. Ensuring npm is installed..."
-        sudo apt-get install -y npm >> "$LOG_FILE" 2>&1 || { log "Error: Could not install npm."; exit 1; }
-        sudo npm install -g yarn >> "$LOG_FILE" 2>&1 || { log "Error: Could not install Yarn."; exit 1; }
-    fi
+    for attempt in {1..3}; do
+        if sudo npm install -g yarn >> "$LOG_FILE" 2>&1; then
+            log "Yarn installed successfully."
+            break
+        else
+            log "Warning: Failed to install Yarn (attempt $attempt/3). Retrying..."
+            sleep 5
+        fi
+        if [ $attempt -eq 3 ]; then
+            log "Error: Failed to install Yarn. Ensuring npm is installed..."
+            sudo apt-get install -y npm >> "$LOG_FILE" 2>&1 || { log "Error: Could not install npm."; exit 1; }
+            sudo npm install -g yarn >> "$LOG_FILE" 2>&1 || { log "Error: Could not install Yarn."; exit 1; }
+        fi
+    done
 fi
 log "Node.js $node_version and Yarn $(yarn --version) installed or verified."
 
 # Step 5: Install wkhtmltopdf with patched Qt
 log "Checking for existing wkhtmltopdf installation..."
+arch=$(dpkg --print-architecture)
 if command_exists wkhtmltopdf; then
     wkhtmltopdf_version=$(wkhtmltopdf -V 2>&1 || true)
     log "wkhtmltopdf version output: $wkhtmltopdf_version"
@@ -185,9 +226,24 @@ if command_exists wkhtmltopdf; then
         exit 1
     fi
 else
-    log "Installing wkhtmltopdf 0.12.6.1 with patched Qt..."
-    if ! wget https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb -O wkhtmltox.deb >> "$LOG_FILE" 2>&1; then
-        log "Error: Failed to download wkhtmltopdf."
+    log "Installing wkhtmltopdf 0.12.6.1 with patched Qt for architecture $arch..."
+    wkhtmltopdf_urls=(
+        "https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_${arch}.deb"
+        "https://downloads.wkhtmltopdf.org/0.12/0.12.6.1/wkhtmltox_0.12.6.1-2.jammy_${arch}.deb"
+    )
+    for url in "${wkhtmltopdf_urls[@]}"; do
+        for attempt in {1..3}; do
+            if wget "$url" -O wkhtmltox.deb >> "$LOG_FILE" 2>&1; then
+                log "Successfully downloaded wkhtmltopdf from $url."
+                break 2
+            else
+                log "Warning: Failed to download wkhtmltopdf from $url (attempt $attempt/3). Retrying..."
+                sleep 5
+            fi
+        done
+    done
+    if [ ! -f "wkhtmltox.deb" ]; then
+        log "Error: Failed to download wkhtmltopdf from all sources after 3 attempts."
         exit 1
     fi
     if ! sudo dpkg -i wkhtmltox.deb >> "$LOG_FILE" 2>&1; then
@@ -219,15 +275,24 @@ log "wkhtmltopdf 0.12.6.1 with patched Qt installed or verified."
 
 # Step 6: Install prerequisites
 log "Installing prerequisites..."
-if ! sudo apt-get install -y \
-    python3.10 python3.10-dev python3.10-venv python3-pip \
-    git curl wget software-properties-common \
-    xvfb libfontconfig libmysqlclient-dev \
-    redis-server nginx mariadb-server mariadb-client \
-    xfonts-75dpi cron supervisor expect >> "$LOG_FILE" 2>&1; then
-    log "Error: Failed to install prerequisites. Trying to fix broken packages..."
-    sudo apt-get install -f -y >> "$LOG_FILE" 2>&1 || { log "Error: Could not install prerequisites."; exit 1; }
-fi
+for attempt in {1..3}; do
+    if sudo apt-get install -y \
+        python3.10 python3.10-dev python3.10-venv python3-pip \
+        git curl wget software-properties-common \
+        xvfb libfontconfig libmysqlclient-dev \
+        redis-server nginx mariadb-server mariadb-client \
+        xfonts-75dpi cron supervisor expect >> "$LOG_FILE" 2>&1; then
+        log "Prerequisites installed successfully."
+        break
+    else
+        log "Warning: Failed to install prerequisites (attempt $attempt/3). Retrying..."
+        sleep 5
+    fi
+    if [ $attempt -eq 3 ]; then
+        log "Error: Failed to install prerequisites. Trying to fix broken packages..."
+        sudo apt-get install -f -y >> "$LOG_FILE" 2>&1 || { log "Error: Could not install prerequisites."; exit 1; }
+    fi
+done
 
 # Verify key tools
 for cmd in python3.10 npm git redis-server nginx mariadb expect; do
@@ -251,10 +316,19 @@ if sudo mysqladmin -u root -p"$mysql_root_password" ping >> "$LOG_FILE" 2>&1; th
     log "MariaDB root password is valid, skipping password reset."
 else
     log "MariaDB root password not set or invalid, attempting to set it..."
-    if ! sudo mysqladmin -u root password "$mysql_root_password" >> "$LOG_FILE" 2>&1; then
-        log "Error: Failed to set MariaDB root password. Please check if MariaDB is properly installed or reset the root password manually."
-        exit 1
-    fi
+    for attempt in {1..3}; do
+        if sudo mysqladmin -u root password "$mysql_root_password" >> "$LOG_FILE" 2>&1; then
+            log "MariaDB root password set successfully."
+            break
+        else
+            log "Warning: Failed to set MariaDB root password (attempt $attempt/3). Retrying..."
+            sleep 5
+        fi
+        if [ $attempt -eq 3 ]; then
+            log "Error: Failed to set MariaDB root password. Please check if MariaDB is properly installed or reset the root password manually."
+            exit 1
+        fi
+    done
 fi
 
 # Secure MariaDB using SQL commands
@@ -307,11 +381,19 @@ fi
 
 # Step 9: Install Frappe Bench
 log "Installing Frappe Bench..."
-if ! sudo pip3 install frappe-bench >> "$LOG_FILE" 2>&1; then
-    log "Error: Failed to install frappe-bench. Updating pip..."
-    sudo pip3 install --upgrade pip >> "$LOG_FILE" 2>&1 || { log "Error: Could not update pip."; exit 1; }
-    sudo pip3 install frappe-bench >> "$LOG_FILE" 2>&1 || { log "Error: Could not install frappe-bench."; exit 1; }
-fi
+for attempt in {1..3}; do
+    if sudo pip3 install frappe-bench >> "$LOG_FILE" 2>&1; then
+        log "Frappe Bench installed successfully."
+        break
+    else
+        log "Warning: Failed to install frappe-bench (attempt $attempt/3). Updating pip..."
+        sudo pip3 install --upgrade pip >> "$LOG_FILE" 2>&1 || { log "Error: Could not update pip."; exit 1; }
+    fi
+    if [ $attempt -eq 3 ]; then
+        log "Error: Failed to install frappe-bench after 3 attempts."
+        exit 1
+    fi
+done
 if ! command_exists bench; then
     log "Error: Frappe Bench not found after installation."
     exit 1
@@ -321,7 +403,6 @@ log "Frappe Bench installed."
 # Step 10: Set up Frappe Bench and apps
 log "Setting up Frappe Bench as $frappe_user..."
 if [ "$create_new_user" = "y" ] || [ "$create_new_user" = "Y" ]; then
-    # Use expect to handle sudo commands
     sudo expect -c "
         set timeout -1
         spawn sudo -u $frappe_user bash
@@ -362,12 +443,19 @@ if [ "$create_new_user" = "y" ] || [ "$create_new_user" = "Y" ]; then
         exit 1
     fi
 else
-    # Run as current user
     cd /home/$frappe_user
-    if ! bench init --frappe-branch version-15 frappe-bench >> "$LOG_FILE" 2>&1; then
-        log "Error: Failed to initialize Frappe Bench."
-        exit 1
-    fi
+    for attempt in {1..3}; do
+        if bench init --frappe-branch version-15 frappe-bench >> "$LOG_FILE" 2>&1; then
+            break
+        else
+            log "Warning: Failed to initialize Frappe Bench (attempt $attempt/3). Retrying..."
+            sleep 5
+        fi
+        if [ $attempt -eq 3 ]; then
+            log "Error: Failed to initialize Frappe Bench."
+            exit 1
+        fi
+    done
     cd frappe-bench
     if ! yarn add less@4 stylus@0.63.0 vue-template-compiler@2.7.16 >> "$LOG_FILE" 2>&1; then
         log "Warning: Failed to install optional yarn dependencies."
@@ -517,12 +605,19 @@ log "Services started successfully."
 # Step 14: Verify site on port 80
 log "Verifying ERPNext site on port 80..."
 sleep 5 # Wait for services to stabilize
-if curl -s "http://$site_name" | grep -q "ERPNext"; then
-    log "ERPNext is running successfully at http://$site_name"
-else
-    log "Error: ERPNext site is not accessible on port 80. Check Nginx logs in /var/log/nginx/ or Bench logs in /home/$frappe_user/frappe-bench/logs."
-    exit 1
-fi
+for attempt in {1..3}; do
+    if curl -s "http://$site_name" | grep -q "ERPNext"; then
+        log "ERPNext is running successfully at http://$site_name"
+        break
+    else
+        log "Warning: ERPNext site not accessible on port 80 (attempt $attempt/3). Retrying..."
+        sleep 5
+    fi
+    if [ $attempt -eq 3 ]; then
+        log "Error: ERPNext site is not accessible on port 80. Check Nginx logs in /var/log/nginx/ or Bench logs in /home/$frappe_user/frappe-bench/logs."
+        exit 1
+    fi
+done
 
 echo "=== Installation Complete ==="
 log "Installation completed successfully."
