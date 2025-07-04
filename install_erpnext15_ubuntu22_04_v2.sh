@@ -86,10 +86,8 @@ if command_exists node; then
     fi
 else
     log "Installing Node.js 18..."
-    # Attempt NodeSource repository first
     if ! curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash - >> "$LOG_FILE" 2>&1; then
         log "Warning: Failed to set up NodeSource repository. Trying alternative method..."
-        # Fallback: Install Node.js from Ubuntu repository
         if ! sudo apt-get install -y nodejs npm >> "$LOG_FILE" 2>&1; then
             log "Error: Failed to install Node.js from Ubuntu repository. Trying to fix dependencies..."
             sudo apt-get install -f -y >> "$LOG_FILE" 2>&1 || { log "Error: Could not install Node.js."; exit 1; }
@@ -100,9 +98,7 @@ else
             sudo apt-get install -f -y >> "$LOG_FILE" 2>&1 || { log "Error: Could not install Node.js."; exit 1; }
         fi
     fi
-    # Update PATH to include common Node.js locations
     export PATH=$PATH:/usr/local/bin:/usr/bin:/bin:/usr/lib/node_modules
-    # Verify Node.js installation
     if ! command_exists node; then
         log "Error: Node.js not found after installation. Checking alternative paths..."
         if [ -f /usr/local/bin/node ]; then
@@ -113,14 +109,12 @@ else
             exit 1
         fi
     fi
-    # Verify Node.js version
     node_version=$(node -v)
     if [[ ! "$node_version" =~ ^v18\. ]]; then
         log "Error: Installed Node.js version ($node_version) is not 18.x. ERPNext requires Node.js 18."
         exit 1
     fi
 fi
-# Install Yarn if not already installed
 if ! command_exists yarn; then
     log "Installing Yarn..."
     if ! sudo npm install -g yarn >> "$LOG_FILE" 2>&1; then
@@ -131,13 +125,34 @@ if ! command_exists yarn; then
 fi
 log "Node.js $node_version and Yarn $(yarn --version) installed or verified."
 
-# intruder: check if node is installed
-if ! command_exists node; then
-    log "Error: Node.js not installed after all attempts."
-    exit 1
+# Step 4: Install wkhtmltopdf with patched Qt
+log "Checking for existing wkhtmltopdf installation..."
+if command_exists wkhtmltopdf; then
+    if wkhtmltopdf -V | grep -q "0.12.6.1 with patched qt"; then
+        log "wkhtmltopdf 0.12.6.1 with patched Qt already installed, skipping installation."
+    else
+        log "Error: wkhtmltopdf installed, but incorrect version. Required: 0.12.6.1 with patched Qt."
+        exit 1
+    fi
+else
+    log "Installing wkhtmltopdf 0.12.6.1 with patched Qt..."
+    if ! wget https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb -O wkhtmltox.deb >> "$LOG_FILE" 2>&1; then
+        log "Error: Failed to download wkhtmltopdf."
+        exit 1
+    fi
+    if ! sudo dpkg -i wkhtmltox.deb >> "$LOG_FILE" 2>&1; then
+        log "Error: Failed to install wkhtmltopdf. Attempting to fix dependencies..."
+        sudo apt-get install -f -y >> "$LOG_FILE" 2>&1 || { log "Error: Could not install wkhtmltopdf."; exit 1; }
+    fi
+    rm wkhtmltox.deb
+    if ! command_exists wkhtmltopdf || ! wkhtmltopdf -V | grep -q "0.12.6.1 with patched qt"; then
+        log "Error: wkhtmltopdf installation failed or incorrect version."
+        exit 1
+    fi
 fi
+log "wkhtmltopdf 0.12.6.1 with patched Qt installed or verified."
 
-# Step 4: Install prerequisites
+# Step 5: Install prerequisites
 log "Installing prerequisites..."
 if ! sudo apt-get install -y \
     python3.10 python3.10-dev python3.10-venv python3-pip \
@@ -150,31 +165,13 @@ if ! sudo apt-get install -y \
 fi
 
 # Verify key tools
-for cmd in python3.10 npm git redis-server nginx mariadb wkhtmltopdf; do
+for cmd in python3.10 npm git redis-server nginx mariadb; do
     if ! command_exists "$cmd"; then
         log "Error: $cmd not installed."
         exit 1
     fi
 done
 log "Prerequisites verified."
-
-# Step 5: Install wkhtmltopdf with patched Qt
-log "Installing wkhtmltopdf 0.12.6.1 with patched Qt..."
-if ! wget https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb -O wkhtmltox.deb >> "$LOG_FILE" 2>&1; then
-    log "Error: Failed to download wkhtmltopdf."
-    exit 1
-fi
-if ! sudo dpkg -i wkhtmltox.deb >> "$LOG_FILE" 2>&1; then
-    log "Error: Failed to install wkhtmltopdf. Attempting to fix dependencies..."
-    sudo apt-get install -f -y >> "$LOG_FILE" 2>&1 || { log "Error: Could not install wkhtmltopdf."; exit 1; }
-fi
-rm wkhtmltox.deb
-if wkhtmltopdf -V | grep -q "0.12.6.1 with patched qt"; then
-    log "wkhtmltopdf 0.12.6.1 with patched Qt installed successfully."
-else
-    log "Error: wkhtmltopdf installation failed or incorrect version."
-    exit 1
-fi
 
 # Step 6: Configure MariaDB
 log "Configuring MariaDB..."
@@ -183,8 +180,7 @@ if ! sudo systemctl is-active --quiet mariadb; then
     sudo systemctl start mariadb >> "$LOG_FILE" 2>&1 || { log "Error: Could not start MariaDB."; exit 1; }
 fi
 if ! sudo mysqladmin -u root password "$mysql_root_password" >> "$LOG_FILE" 2>&1; then
-    log "Error: Failed to set MariaDB root password. It may already be set. Please verify."
-    exit 1
+    log "Warning: Failed to set MariaDB root password. It may already be set. Continuing..."
 fi
 sudo mysql_secure_installation <<EOF >> "$LOG_FILE" 2>&1
 $mysql_root_password
@@ -216,9 +212,7 @@ if ! sudo systemctl restart mariadb >> "$LOG_FILE" 2>&1; then
 fi
 log "MariaDB configured and running."
 
-# Step 7: Create Frappe Bench
-
- user
+# Step 7: Create Frappe Bench user
 log "Creating user $frappe_user..."
 if ! sudo adduser --disabled-password --gecos "" "$frappe_user" >> "$LOG_FILE" 2>&1; then
     log "Error: Failed to create user $frappe_user."
