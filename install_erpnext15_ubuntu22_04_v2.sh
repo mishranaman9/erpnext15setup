@@ -38,12 +38,29 @@ echo "=== ERPNext 15, HRMS 15, Chat, and wkhtmltopdf Installation Script for Ubu
 
 # Step 1: Prompt for inputs
 log "Prompting for user inputs..."
-echo "Enter the username for the Frappe Bench user (e.g., frappe):"
-read -r frappe_user
-validate_input "$frappe_user"
-if id "$frappe_user" >/dev/null 2>&1; then
-    log "Error: User $frappe_user already exists."
-    exit 1
+echo "Do you want to create a new user for Frappe Bench? (y/n, default: y)"
+read -r create_new_user
+create_new_user=${create_new_user:-y}
+if [ "$create_new_user" = "y" ] || [ "$create_new_user" = "Y" ]; then
+    echo "Enter the username for the Frappe Bench user (e.g., frappe):"
+    read -r frappe_user
+    validate_input "$frappe_user"
+    if id "$frappe_user" >/dev/null 2>&1; then
+        log "Error: User $frappe_user already exists."
+        exit 1
+    fi
+    echo "Enter the password for user $frappe_user:"
+    read -s frappe_user_password
+    validate_input "$frappe_user_password"
+    echo
+else
+    frappe_user=$(whoami)
+    log "Using current user $frappe_user for Frappe Bench setup."
+    if ! groups | grep -q sudo; then
+        log "Error: Current user $frappe_user is not in the sudo group."
+        exit 1
+    fi
+    frappe_user_password=""
 fi
 
 echo "Enter the MySQL root password to be set or existing password:"
@@ -176,13 +193,13 @@ if ! sudo apt-get install -y \
     git curl wget software-properties-common \
     xvfb libfontconfig libmysqlclient-dev \
     redis-server nginx mariadb-server mariadb-client \
-    xfonts-75dpi cron supervisor >> "$LOG_FILE" 2>&1; then
+    xfonts-75dpi cron supervisor expect >> "$LOG_FILE" 2>&1; then
     log "Error: Failed to install prerequisites. Trying to fix broken packages..."
     sudo apt-get install -f -y >> "$LOG_FILE" 2>&1 || { log "Error: Could not install prerequisites."; exit 1; }
 fi
 
 # Verify key tools
-for cmd in python3.10 npm git redis-server nginx mariadb; do
+for cmd in python3.10 npm git redis-server nginx mariadb expect; do
     if ! command_exists "$cmd"; then
         log "Error: $cmd not installed."
         exit 1
@@ -239,13 +256,17 @@ fi
 log "MariaDB configured and running."
 
 # Step 7: Create Frappe Bench user
-log "Creating user $frappe_user..."
-if ! sudo adduser --disabled-password --gecos "" "$frappe_user" >> "$LOG_FILE" 2>&1; then
-    log "Error: Failed to create user $frappe_user."
-    exit 1
+if [ "$create_new_user" = "y" ] || [ "$create_new_user" = "Y" ]; then
+    log "Creating user $frappe_user..."
+    if ! sudo adduser --disabled-login --gecos "" "$frappe_user" >> "$LOG_FILE" 2>&1; then
+        log "Error: Failed to create user $frappe_user."
+        exit 1
+    fi
+    log "Setting password for user $frappe_user..."
+    echo "$frappe_user:$frappe_user_password" | sudo chpasswd >> "$LOG_FILE" 2>&1 || { log "Error: Failed to set password for $frappe_user."; exit 1; }
+    sudo usermod -aG sudo "$frappe_user"
+    log "User $frappe_user created with sudo privileges."
 fi
-sudo usermod -aG sudo "$frappe_user"
-log "User $frappe_user created."
 
 # Step 8: Install Frappe Bench
 log "Installing Frappe Bench..."
@@ -262,65 +283,139 @@ log "Frappe Bench installed."
 
 # Step 9: Set up Frappe Bench and apps
 log "Setting up Frappe Bench as $frappe_user..."
-sudo -u "$frappe_user" bash <<EOF >> "$LOG_FILE" 2>&1
-cd /home/$frappe_user
-if ! bench init --frappe-branch version-15 frappe-bench; then
-    echo "Error: Failed to initialize Frappe Bench." >> "$LOG_FILE"
-    exit 1
-fi
-cd frappe-bench
-bench set-config -g developer_mode true
-if ! bench new-site $site_name --db-root-password "$mysql_root_password" --admin-password "$admin_password"; then
-    echo "Error: Failed to create site $site_name." >> "$LOG_FILE"
-    exit 1
-fi
-if ! bench get-app payments; then
-    echo "Error: Failed to get payments app." >> "$LOG_FILE"
-    exit 1
-fi
-if ! bench get-app --branch version-15 erpnext; then
-    echo "Error: Failed to get ERPNext app." >> "$LOG_FILE"
-    exit 1
-fi
-if ! bench get-app --branch version-15 hrms; then
-    echo "Error: Failed to get HRMS app." >> "$LOG_FILE"
-    exit 1
-fi
-if ! bench get-app --branch version-15 frappe_chat; then
-    echo "Error: Failed to get Frappe Chat app." >> "$LOG_FILE"
-    exit 1
-fi
-if ! bench --site $site_name install-app erpnext; then
-    echo "Error: Failed to install ERPNext app." >> "$LOG_FILE"
-    exit 1
-fi
-if ! bench --site $site_name install-app hrms; then
-    echo "Error: Failed to install HRMS app." >> "$LOG_FILE"
-    exit 1
-fi
-if ! bench --site $site_name install-app frappe_chat; then
-    echo "Error: Failed to install Frappe Chat app." >> "$LOG_FILE"
-    exit 1
-fi
-EOF
-if [ $? -ne 0 ]; then
-    log "Error: Frappe Bench setup failed. Check logs in $LOG_FILE."
-    exit 1
+if [ "$create_new_user" = "y" ] || [ "$create_new_user" = "Y" ]; then
+    # Use expect to handle sudo password prompts
+    sudo expect -c "
+        spawn sudo -u $frappe_user bash
+        expect \"{\\\$frappe_user@*}\"
+        send \"cd /home/$frappe_user\\r\"
+        expect \"{\\\$frappe_user@*}\"
+        send \"bench init --frappe-branch version-15 frappe-bench\\r\"
+        expect {
+            \"{\\\$frappe_user@*}\" { send \"cd frappe-bench\\r\" }
+            eof { puts stderr \"Error: Failed to initialize Frappe Bench.\"; exit 1 }
+        }
+        expect \"{\\\$frappe_user@*}\"
+        send \"yarn add less@4 stylus@0.63.0 vue-template-compiler@2.7.16\\r\"
+        expect \"{\\\$frappe_user@*}\"
+        send \"for i in 1 2 3; do yarn install --check-files && break || sleep 5; done\\r\"
+        expect {
+            \"{\\\$frappe_user@*}\" { }
+            eof { puts stderr \"Error: Failed to run yarn install.\"; exit 1 }
+        }
+        send \"bench set-config -g developer_mode true\\r\"
+        expect \"{\\\$frappe_user@*}\"
+        send \"bench new-site $site_name --db-root-password \\\"$mysql_root_password\\\" --admin-password \\\"$admin_password\\\"\\r\"
+        expect {
+            \"{\\\$frappe_user@*}\" { }
+            eof { puts stderr \"Error: Failed to create site $site_name.\"; exit 1 }
+        }
+        send \"bench get-app payments\\r\"
+        expect \"{\\\$frappe_user@*}\"
+        send \"bench get-app --branch version-15 erpnext\\r\"
+        expect \"{\\\$frappe_user@*}\"
+        send \"bench get-app --branch version-15 hrms\\r\"
+        expect \"{\\\$frappe_user@*}\"
+        send \"bench get-app --branch version-15 frappe_chat\\r\"
+        expect \"{\\\$frappe_user@*}\"
+        send \"bench --site $site_name install-app erpnext\\r\"
+        expect \"{\\\$frappe_user@*}\"
+        send \"bench --site $site_name install-app hrms\\r\"
+        expect \"{\\\$frappe_user@*}\"
+        send \"bench --site $site_name install-app frappe_chat\\r\"
+        expect \"{\\\$frappe_user@*}\"
+        send \"exit\\r\"
+        expect eof
+    " >> "$LOG_FILE" 2>&1
+    if [ $? -ne 0 ]; then
+        log "Error: Frappe Bench setup failed. Check logs in $LOG_FILE."
+        exit 1
+    fi
+else
+    # Run as current user
+    cd /home/$frappe_user
+    if ! bench init --frappe-branch version-15 frappe-bench >> "$LOG_FILE" 2>&1; then
+        log "Error: Failed to initialize Frappe Bench."
+        exit 1
+    fi
+    cd frappe-bench
+    if ! yarn add less@4 stylus@0.63.0 vue-template-compiler@2.7.16 >> "$LOG_FILE" 2>&1; then
+        log "Warning: Failed to install optional yarn dependencies."
+    fi
+    for i in 1 2 3; do
+        if yarn install --check-files >> "$LOG_FILE" 2>&1; then
+            break
+        else
+            log "Warning: yarn install failed, retrying ($i/3)..."
+            sleep 5
+        fi
+        if [ $i -eq 3 ]; then
+            log "Error: Failed to run yarn install after 3 attempts."
+            exit 1
+        fi
+    done
+    if ! bench set-config -g developer_mode true >> "$LOG_FILE" 2>&1; then
+        log "Error: Failed to set developer_mode."
+        exit 1
+    fi
+    if ! bench new-site $site_name --db-root-password "$mysql_root_password" --admin-password "$admin_password" >> "$LOG_FILE" 2>&1; then
+        log "Error: Failed to create site $site_name."
+        exit 1
+    fi
+    if ! bench get-app payments >> "$LOG_FILE" 2>&1; then
+        log "Error: Failed to get payments app."
+        exit 1
+    fi
+    if ! bench get-app --branch version-15 erpnext >> "$LOG_FILE" 2>&1; then
+        log "Error: Failed to get ERPNext app."
+        exit 1
+    fi
+    if ! bench get-app --branch version-15 hrms >> "$LOG_FILE" 2>&1; then
+        log "Error: Failed to get HRMS app."
+        exit 1
+    fi
+    if ! bench get-app --branch version-15 frappe_chat >> "$LOG_FILE" 2>&1; then
+        log "Error: Failed to get Frappe Chat app."
+        exit 1
+    fi
+    if ! bench --site $site_name install-app erpnext >> "$LOG_FILE" 2>&1; then
+        log "Error: Failed to install ERPNext app."
+        exit 1
+    fi
+    if ! bench --site $site_name install-app hrms >> "$LOG_FILE" 2>&1; then
+        log "Error: Failed to install HRMS app."
+        exit 1
+    fi
+    if ! bench --site $site_name install-app frappe_chat >> "$LOG_FILE" 2>&1; then
+        log "Error: Failed to install Frappe Chat app."
+        exit 1
+    fi
 fi
 log "Frappe Bench and apps installed."
 
 # Step 10: Configure production setup
 log "Configuring production setup to serve on port 80..."
-sudo -u "$frappe_user" bash <<EOF >> "$LOG_FILE" 2>&1
-cd /home/$frappe_user/frappe-bench
-if ! bench setup production "$frappe_user" --yes; then
-    echo "Error: Failed to set up production environment." >> "$LOG_FILE"
-    exit 1
-fi
-EOF
-if [ $? -ne 0 ]; then
-    log "Error: Production setup failed."
-    exit 1
+if [ "$create_new_user" = "y" ] || [ "$create_new_user" = "Y" ]; then
+    sudo expect -c "
+        spawn sudo -u $frappe_user bash
+        expect \"{\\\$frappe_user@*}\"
+        send \"cd /home/$frappe_user/frappe-bench\\r\"
+        expect \"{\\\$frappe_user@*}\"
+        send \"bench setup production $frappe_user --yes\\r\"
+        expect \"{\\\$frappe_user@*}\"
+        send \"exit\\r\"
+        expect eof
+    " >> "$LOG_FILE" 2>&1
+    if [ $? -ne 0 ]; then
+        log "Error: Production setup failed."
+        exit 1
+    fi
+else
+    cd /home/$frappe_user/frappe-bench
+    if ! bench setup production "$frappe_user" --yes >> "$LOG_FILE" 2>&1; then
+        log "Error: Failed to set up production environment."
+        exit 1
+    fi
 fi
 
 # Step 11: Ensure Nginx configuration for port 80
@@ -406,3 +501,7 @@ echo "Admin Password: $admin_password"
 echo "Frappe Bench directory: /home/$frappe_user/frappe-bench"
 echo "Logs available at: $LOG_FILE"
 echo "To start the bench manually, run: sudo -u $frappe_user bash -c 'cd /home/$frappe_user/frappe-bench && bench start'"
+if [ "$create_new_user" = "y" ] || [ "$create_new_user" = "Y" ]; then
+    echo "Frappe user: $frappe_user"
+    echo "Frappe user password: [hidden for security, use the password you provided]"
+fi
