@@ -78,7 +78,7 @@ echo "=== ERPNext 15, HRMS 15, Chat, and wkhtmltopdf Installation Script for Ubu
 
 # Verify running with bash
 if [ -z "$BASH_VERSION" ]; then
-    log "Error: This script must be run with bash, not sh or another shell."
+    log "Error: This script must be run with bash, not sh or another shell. Run with: sudo bash $0"
     exit 1
 fi
 
@@ -237,23 +237,31 @@ else
         log "Error: Unsupported architecture $arch. Only amd64 and arm64 are supported."
         exit 1
     fi
-    wkhtmltopdf_urls=(
-        "https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_${arch}.deb"
-        "https://downloads.wkhtmltopdf.org/0.12/0.12.6.1/wkhtmltox_0.12.6.1-2.jammy_${arch}.deb"
-    )
     downloaded=false
-    for url in "${wkhtmltopdf_urls[@]}"; do
+    # Try first URL
+    for attempt in {1..3}; do
+        if wget "https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_${arch}.deb" -O wkhtmltox.deb >> "$LOG_FILE" 2>&1; then
+            log "Successfully downloaded wkhtmltopdf from GitHub."
+            downloaded=true
+            break
+        else
+            log "Warning: Failed to download wkhtmltopdf from GitHub (attempt $attempt/3). Retrying..."
+            sleep 5
+        fi
+    done
+    # Try fallback URL if first fails
+    if [ "$downloaded" = false ]; then
         for attempt in {1..3}; do
-            if wget "$url" -O wkhtmltox.deb >> "$LOG_FILE" 2>&1; then
-                log "Successfully downloaded wkhtmltopdf from $url."
+            if wget "https://downloads.wkhtmltopdf.org/0.12/0.12.6.1/wkhtmltox_0.12.6.1-2.jammy_${arch}.deb" -O wkhtmltox.deb >> "$LOG_FILE" 2>&1; then
+                log "Successfully downloaded wkhtmltopdf from fallback source."
                 downloaded=true
-                break 2
+                break
             else
-                log "Warning: Failed to download wkhtmltopdf from $url (attempt $attempt/3). Retrying..."
+                log "Warning: Failed to download wkhtmltopdf from fallback source (attempt $attempt/3). Retrying..."
                 sleep 5
             fi
         done
-    done
+    fi
     if [ "$downloaded" = false ]; then
         log "Error: Failed to download wkhtmltopdf from all sources after 3 attempts."
         exit 1
@@ -428,7 +436,7 @@ if [ "$create_new_user" = "y" ] || [ "$create_new_user" = "Y" ]; then
         send \"yarn add less@4 stylus@0.63.0 vue-template-compiler@2.7.16\\r\"
         expect \"{\\\$frappe_user@*}\"
         send \"for i in 1 2 3; do yarn install --check-files && break || sleep 5; done\\r\"
-        expect \"{\\\$frappe_user@*}\"
+        expect \"{\\\icha0
         send \"bench set-config -g developer_mode true\\r\"
         expect \"{\\\$frappe_user@*}\"
         send \"bench new-site $site_name --db-root-password \\\"$mysql_root_password\\\" --admin-password \\\"$admin_password\\\"\\r\"
@@ -643,4 +651,3 @@ if [ "$create_new_user" = "y" ] || [ "$create_new_user" = "Y" ]; then
     echo "Frappe user: $frappe_user"
     echo "Frappe user password: [hidden for security, use the password you provided]"
 fi
-```
