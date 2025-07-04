@@ -147,7 +147,16 @@ if [ -f "wkhtmltox.deb" ]; then
     log "Removed existing wkhtmltox.deb file."
 fi
 
-# Step 3: Update system packages
+# Step 3: Clean up existing MariaDB/MySQL installations
+log "Cleaning up existing MariaDB/MySQL installations..."
+sudo systemctl stop mariadb 2>/dev/null
+sudo systemctl stop mysql 2>/dev/null
+sudo killall -9 mysqld 2>/dev/null || true
+sudo apt-get purge -y mariadb-server mariadb-client mariadb-server-10.6 mariadb-server-core-10.6 mysql-server mysql-client 2>&1 | tee -a "$LOG_FILE"
+sudo rm -rf /var/lib/mysql /etc/mysql /var/log/mysql
+log "Existing MariaDB/MySQL configurations removed."
+
+# Step 4: Update system packages
 log "Updating system packages..."
 for attempt in {1..3}; do
     if sudo apt-get update -y >> "$LOG_FILE" 2>&1; then
@@ -166,8 +175,9 @@ if ! sudo apt-get upgrade -y >> "$LOG_FILE" 2>&1; then
     log "Error: Failed to upgrade packages. Trying to fix broken dependencies..."
     sudo apt-get install -f -y >> "$LOG_FILE" 2>&1 || { log "Error: Could not fix dependencies."; exit 1; }
 fi
+sudo apt-get install -y sosreport >> "$LOG_FILE" 2>&1 || log "Warning: Failed to install sosreport, continuing..."
 
-# Step 4: Install Node.js 18
+# Step 5: Install Node.js 18
 log "Checking for existing Node.js installation..."
 if command_exists node; then
     node_version=$(node -v)
@@ -228,7 +238,7 @@ if ! command_exists yarn; then
 fi
 log "Node.js $node_version and Yarn $(yarn --version) installed or verified."
 
-# Step 5: Install wkhtmltopdf with patched Qt
+# Step 6: Install wkhtmltopdf with patched Qt
 log "Checking for existing wkhtmltopdf installation..."
 arch=$(dpkg --print-architecture)
 if command_exists wkhtmltopdf; then
@@ -300,7 +310,7 @@ else
 fi
 log "wkhtmltopdf 0.12.6.1 with patched Qt installed or verified."
 
-# Step 6: Install prerequisites
+# Step 7: Install prerequisites
 log "Installing prerequisites..."
 for attempt in {1..3}; do
     if sudo apt-get install -y \
@@ -330,12 +340,26 @@ for cmd in python3.10 npm git redis-server nginx mariadb; do
 done
 log "Prerequisites verified."
 
-# Step 7: Configure MariaDB
+# Step 8: Configure MariaDB
 log "Configuring MariaDB..."
+sudo mkdir -p /var/log/mysql
+sudo chown mysql:mysql /var/log/mysql
+sudo chmod 755 /var/log/mysql
+sudo tee /etc/mysql/mariadb.conf.d/50-server.cnf > /dev/null <<EOF
+[mysqld]
+log_error = /var/log/mysql/error.log
+EOF
+sudo systemctl daemon-reload >> "$LOG_FILE" 2>&1 || { log "Error: Failed to reload systemd."; exit 1; }
 if ! sudo systemctl is-active --quiet mariadb; then
-    log "Error: MariaDB service is not running. Starting it..."
-    sudo systemctl start mariadb >> "$LOG_FILE" 2>&1 || { log "Error: Could not start MariaDB."; exit 1; }
+    log "MariaDB service is not running. Attempting to initialize and start..."
+    sudo mysql_install_db --user=mysql --datadir=/var/lib/mysql >> "$LOG_FILE" 2>&1 || { log "Error: Failed to initialize MariaDB data directory."; exit 1; }
+    sudo systemctl start mariadb >> "$LOG_FILE" 2>&1 || { 
+        log "Error: Could not start MariaDB. Checking logs..."
+        sudo journalctl -xeu mariadb.service >> "$LOG_FILE" 2>&1
+        exit 1
+    }
 fi
+sudo systemctl enable mariadb >> "$LOG_FILE" 2>&1 || { log "Error: Failed to enable MariaDB."; exit 1; }
 
 # Check if the provided root password works
 log "Checking if MariaDB root password is valid..."
@@ -387,7 +411,7 @@ if ! sudo systemctl restart mariadb >> "$LOG_FILE" 2>&1; then
 fi
 log "MariaDB configured and running."
 
-# Step 8: Create Frappe Bench user
+# Step 9: Create Frappe Bench user
 if [ "$create_new_user" = "y" ] || [ "$create_new_user" = "Y" ]; then
     if ! id "$frappe_user" >/dev/null 2>&1; then
         log "Creating user $frappe_user..."
@@ -405,7 +429,7 @@ if [ "$create_new_user" = "y" ] || [ "$create_new_user" = "Y" ]; then
     log "User $frappe_user verified or created with sudo privileges."
 fi
 
-# Step 9: Install Frappe Bench
+# Step 10: Install Frappe Bench
 log "Installing Frappe Bench..."
 for attempt in {1..3}; do
     if sudo pip3 install frappe-bench >> "$LOG_FILE" 2>&1; then
@@ -426,7 +450,7 @@ if ! command_exists bench; then
 fi
 log "Frappe Bench installed."
 
-# Step 10: Set up Frappe Bench and apps
+# Step 11: Set up Frappe Bench and apps
 log "Setting up Frappe Bench as $frappe_user..."
 if [ "$create_new_user" = "y" ] || [ "$create_new_user" = "Y" ]; then
     cd /home/$frappe_user || { log "Error: Failed to change to /home/$frappe_user"; exit 1; }
@@ -494,7 +518,7 @@ else
 fi
 log "Frappe Bench and apps installed."
 
-# Step 11: Configure production setup
+# Step 12: Configure production setup
 log "Configuring production setup to serve on port 80..."
 if [ "$create_new_user" = "y" ] || [ "$create_new_user" = "Y" ]; then
     cd /home/$frappe_user/frappe-bench || { log "Error: Failed to change to frappe-bench directory"; exit 1; }
@@ -504,7 +528,7 @@ else
     bench setup production "$frappe_user" --yes >> "$LOG_FILE" 2>&1 || { log "Error: Failed to set up production environment"; exit 1; }
 fi
 
-# Step 12: Ensure Nginx configuration for port 80
+# Step 13: Ensure Nginx configuration for port 80
 log "Configuring Nginx to serve on port 80..."
 sudo tee /etc/nginx/sites-available/$site_name > /dev/null <<EOF
 server {
@@ -549,7 +573,7 @@ if ! sudo nginx -t >> "$LOG_FILE" 2>&1; then
 fi
 log "Nginx configured for port 80."
 
-# Step 13: Start services
+# Step 14: Start services
 log "Starting Nginx and Supervisor services..."
 if ! sudo systemctl enable nginx supervisor >> "$LOG_FILE" 2>&1; then
     log "Error: Failed to enable services."
@@ -569,7 +593,7 @@ if ! sudo systemctl is-active --quiet supervisor; then
 fi
 log "Services started successfully."
 
-# Step 14: Verify site on port 80
+# Step 15: Verify site on port 80
 log "Verifying ERPNext site on port 80..."
 sleep 5
 for attempt in {1..3}; do
