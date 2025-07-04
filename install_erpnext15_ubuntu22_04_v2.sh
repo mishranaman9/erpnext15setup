@@ -76,6 +76,12 @@ check_port() {
 
 echo "=== ERPNext 15, HRMS 15, Chat, and wkhtmltopdf Installation Script for Ubuntu 22.04 ==="
 
+# Verify running with bash
+if [ -z "$BASH_VERSION" ]; then
+    log "Error: This script must be run with bash, not sh or another shell."
+    exit 1
+fi
+
 # Step 1: Prompt for inputs
 log "Prompting for user inputs..."
 echo "Do you want to create a new user for Frappe Bench? (y/n, default: y)"
@@ -227,14 +233,20 @@ if command_exists wkhtmltopdf; then
     fi
 else
     log "Installing wkhtmltopdf 0.12.6.1 with patched Qt for architecture $arch..."
+    if [ "$arch" != "amd64" ] && [ "$arch" != "arm64" ]; then
+        log "Error: Unsupported architecture $arch. Only amd64 and arm64 are supported."
+        exit 1
+    fi
     wkhtmltopdf_urls=(
         "https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_${arch}.deb"
         "https://downloads.wkhtmltopdf.org/0.12/0.12.6.1/wkhtmltox_0.12.6.1-2.jammy_${arch}.deb"
     )
+    downloaded=false
     for url in "${wkhtmltopdf_urls[@]}"; do
         for attempt in {1..3}; do
             if wget "$url" -O wkhtmltox.deb >> "$LOG_FILE" 2>&1; then
                 log "Successfully downloaded wkhtmltopdf from $url."
+                downloaded=true
                 break 2
             else
                 log "Warning: Failed to download wkhtmltopdf from $url (attempt $attempt/3). Retrying..."
@@ -242,7 +254,7 @@ else
             fi
         done
     done
-    if [ ! -f "wkhtmltox.deb" ]; then
+    if [ "$downloaded" = false ]; then
         log "Error: Failed to download wkhtmltopdf from all sources after 3 attempts."
         exit 1
     fi
