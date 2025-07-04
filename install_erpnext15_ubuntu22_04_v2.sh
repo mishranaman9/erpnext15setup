@@ -3,13 +3,16 @@
 # Exit on error
 set -e
 
-# Initialize log file immediately
-LOG_FILE="/var/log/erpnext_install_$(date +%F_%H-%M-%S).log"
-echo "[$(date +%F_%H:%M:%S)] Starting installation, logging to $LOG_FILE" | tee -a "$LOG_FILE"
+# Immediate debug output to stderr
+echo "Starting script execution at $(date)" >&2
+
+# Initialize log file
+LOG_FILE="/var/log/erpnext_install_$(date +%Y%m%d_%H%M%S).log"
+echo "[$(date +%Y-%m-%d_%H:%M:%S)] Starting installation, logging to $LOG_FILE" | tee -a "$LOG_FILE" >&2
 
 # Function to log messages
 log() {
-    echo "[$(date +%F_%H:%M:%S)] $1" | tee -a "$LOG_FILE"
+    echo "[$(date +%Y-%m-%d_%H:%M:%S)] $1" | tee -a "$LOG_FILE" >&2
 }
 
 # Function to check if a command exists
@@ -17,22 +20,22 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
-# Function to validate user input with retries
+# Function to validate user input with retries and timeout
 validate_input() {
     local input_name="$2"
     local input_value=""
     local attempts=3
     local count=0
     while [ $count -lt $attempts ]; do
-        echo "Enter $input_name:"
-        read -r input_value
-        if [ -n "$input_value" ]; then
+        echo "Enter $input_name (timeout 30s):" >&2
+        read -t 30 -r input_value
+        if [ $? -eq 0 ] && [ -n "$input_value" ]; then
             echo "$input_value"
-            log "$input_name provided."
+            log "$input_name provided: $input_value"
             return
         fi
         count=$((count + 1))
-        log "Error: $input_name cannot be empty. Attempt $count/$attempts."
+        log "Error: $input_name empty or timed out. Attempt $count/$attempts."
         if [ $count -eq $attempts ]; then
             log "Error: Failed to provide $input_name after $attempts attempts."
             exit 1
@@ -40,23 +43,23 @@ validate_input() {
     done
 }
 
-# Function to validate sensitive input (e.g., passwords) with retries
+# Function to validate sensitive input (e.g., passwords) with retries and timeout
 validate_sensitive_input() {
     local input_name="$2"
     local input_value=""
     local attempts=3
     local count=0
     while [ $count -lt $attempts ]; do
-        echo "Enter $input_name:"
-        read -s input_value
-        echo
-        if [ -n "$input_value" ]; then
+        echo "Enter $input_name (timeout 30s):" >&2
+        read -t 30 -s input_value
+        echo >&2
+        if [ $? -eq 0 ] && [ -n "$input_value" ]; then
             echo "$input_value"
             log "$input_name provided."
             return
         fi
         count=$((count + 1))
-        log "Error: $input_name cannot be empty. Attempt $count/$attempts."
+        log "Error: $input_name empty or timed out. Attempt $count/$attempts."
         if [ $count -eq $attempts ]; then
             log "Error: Failed to provide $input_name after $attempts attempts."
             exit 1
@@ -80,14 +83,20 @@ if [ -z "$BASH_VERSION" ]; then
 fi
 log "Running with bash version: $BASH_VERSION"
 
-echo "=== ERPNext 15, HRMS 15, Chat, and wkhtmltopdf Installation Script for Ubuntu 22.04 ==="
+echo "=== ERPNext 15, HRMS 15, Chat, and wkhtmltopdf Installation Script for Ubuntu 22.04 ===" >&2
 
 # Step 1: Prompt for inputs
 log "Prompting for user inputs..."
-echo "Do you want to create a new user for Frappe Bench? (y/n, default: y)"
-read -r create_new_user
-create_new_user=${create_new_user:-y}
-log "Create new user response: $create_new_user"
+echo "Do you want to create a new user for Frappe Bench? (y/n, default: y, timeout 30s)" >&2
+read -t 30 -r create_new_user
+if [ $? -ne 0 ]; then
+    log "Error: Timed out waiting for create_new_user input. Using default: y"
+    create_new_user="y"
+else
+    create_new_user=${create_new_user:-y}
+    log "Create new user response: $create_new_user"
+fi
+
 if [ "$create_new_user" = "y" ] || [ "$create_new_user" = "Y" ]; then
     frappe_user=$(validate_input "frappe_user" "Frappe Bench username")
     log "Frappe Bench username entered: $frappe_user"
@@ -577,15 +586,15 @@ for attempt in {1..3}; do
     fi
 done
 
-echo "=== Installation Complete ==="
+echo "=== Installation Complete ===" >&2
 log "Installation completed successfully."
-echo "Access ERPNext at: http://$site_name"
-echo "Admin Username: Administrator"
-echo "Admin Password: $admin_password"
-echo "Frappe Bench directory: /home/$frappe_user/frappe-bench"
-echo "Logs available at: $LOG_FILE"
-echo "To start the bench manually, run: sudo -u $frappe_user bash -c 'cd /home/$frappe_user/frappe-bench && bench start'"
+echo "Access ERPNext at: http://$site_name" >&2
+echo "Admin Username: Administrator" >&2
+echo "Admin Password: $admin_password" >&2
+echo "Frappe Bench directory: /home/$frappe_user/frappe-bench" >&2
+echo "Logs available at: $LOG_FILE" >&2
+echo "To start the bench manually, run: sudo -u $frappe_user bash -c 'cd /home/$frappe_user/frappe-bench && bench start'" >&2
 if [ "$create_new_user" = "y" ] || [ "$create_new_user" = "Y" ]; then
-    echo "Frappe user: $frappe_user"
-    echo "Frappe user password: [hidden for security, use the password you provided]"
+    echo "Frappe user: $frappe_user" >&2
+    echo "Frappe user password: [hidden for security, use the password you provided]" >&2
 fi
