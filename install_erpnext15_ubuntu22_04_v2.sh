@@ -20,8 +20,9 @@ command_exists() {
 
 # Function to validate user input
 validate_input() {
+    local input_name="$2"
     if [ -z "$1" ]; then
-        log "Error: Input cannot be empty."
+        log "Error: $input_name cannot be empty."
         exit 1
     fi
 }
@@ -42,15 +43,17 @@ log "Prompting for user inputs..."
 echo "Do you want to create a new user for Frappe Bench? (y/n, default: y)"
 read -r create_new_user
 create_new_user=${create_new_user:-y}
+log "Create new user response: $create_new_user"
 if [ "$create_new_user" = "y" ] || [ "$create_new_user" = "Y" ]; then
     echo "Enter the username for the Frappe Bench user (e.g., frappe):"
     read -r frappe_user
-    validate_input "$frappe_user"
+    validate_input "$frappe_user" "Frappe Bench username"
+    log "Frappe Bench username entered: $frappe_user"
     if id "$frappe_user" >/dev/null 2>&1; then
         log "User $frappe_user already exists. Using existing user."
         echo "Enter the password for existing user $frappe_user:"
         read -s frappe_user_password
-        validate_input "$frappe_user_password"
+        validate_input "$frappe_user_password" "Frappe user password"
         echo
         if ! groups "$frappe_user" | grep -q sudo; then
             log "Adding $frappe_user to sudo group..."
@@ -59,7 +62,7 @@ if [ "$create_new_user" = "y" ] || [ "$create_new_user" = "Y" ]; then
     else
         echo "Enter the password for new user $frappe_user:"
         read -s frappe_user_password
-        validate_input "$frappe_user_password"
+        validate_input "$frappe_user_password" "Frappe user password"
         echo
     fi
 else
@@ -74,17 +77,20 @@ fi
 
 echo "Enter the MySQL root password to be set or existing password:"
 read -s mysql_root_password
-validate_input "$mysql_root_password"
+validate_input "$mysql_root_password" "MySQL root password"
 echo
+log "MySQL root password provided."
 
 echo "Enter the Administrator password for ERPNext:"
 read -s admin_password
-validate_input "$admin_password"
+validate_input "$admin_password" "ERPNext Administrator password"
 echo
+log "ERPNext Administrator password provided."
 
 echo "Enter the site name for ERPNext (e.g., erp.mysite.com):"
 read -r site_name
-validate_input "$site_name"
+validate_input "$site_name" "Site name"
+log "Site name entered: $site_name"
 
 # Check if port 80 is free
 check_port 80
