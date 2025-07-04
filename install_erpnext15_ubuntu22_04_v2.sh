@@ -46,7 +46,7 @@ if id "$frappe_user" >/dev/null 2>&1; then
     exit 1
 fi
 
-echo "Enter the MySQL root password to be set:"
+echo "Enter the MySQL root password to be set or existing password:"
 read -s mysql_root_password
 validate_input "$mysql_root_password"
 echo
@@ -147,7 +147,6 @@ else
         sudo apt-get install -f -y >> "$LOG_FILE" 2>&1 || { log "Error: Could not install wkhtmltopdf."; exit 1; }
     fi
     rm wkhtmltox.deb
-    # Update PATH for wkhtmltopdf
     export PATH=$PATH:/usr/local/bin:/usr/bin:/bin
     if ! command_exists wkhtmltopdf; then
         log "Error: wkhtmltopdf not found after installation. Checking alternative paths..."
@@ -165,7 +164,6 @@ else
         log "Error: wkhtmltopdf installed, but incorrect version. Required: 0.12.6.1 with patched Qt. Found: $wkhtmltopdf_version"
         exit 1
     fi
-    # Ensure wkhtmltopdf is executable
     sudo chmod +x /usr/local/bin/wkhtmltopdf 2>/dev/null || true
     sudo chmod +x /usr/bin/wkhtmltopdf 2>/dev/null || true
 fi
@@ -198,21 +196,30 @@ if ! sudo systemctl is-active --quiet mariadb; then
     log "Error: MariaDB service is not running. Starting it..."
     sudo systemctl start mariadb >> "$LOG_FILE" 2>&1 || { log "Error: Could not start MariaDB."; exit 1; }
 fi
-if ! sudo mysqladmin -u root password "$mysql_root_password" >> "$LOG_FILE" 2>&1; then
-    log "Warning: Failed to set MariaDB root password. It may already be set. Continuing..."
+
+# Check if the provided root password works
+log "Checking if MariaDB root password is valid..."
+if sudo mysqladmin -u root -p"$mysql_root_password" ping >> "$LOG_FILE" 2>&1; then
+    log "MariaDB root password is valid, skipping password reset."
+else
+    log "MariaDB root password not set or invalid, attempting to set it..."
+    if ! sudo mysqladmin -u root password "$mysql_root_password" >> "$LOG_FILE" 2>&1; then
+        log "Error: Failed to set MariaDB root password. Please check if MariaDB is properly installed or reset the root password manually."
+        exit 1
+    fi
 fi
-sudo mysql_secure_installation <<EOF >> "$LOG_FILE" 2>&1
-$mysql_root_password
-Y
-$mysql_root_password
-$mysql_root_password
-Y
-N
-Y
-Y
-EOF
+
+# Secure MariaDB using SQL commands
+log "Securing MariaDB with SQL commands..."
+sudo mysql -u root -p"$mysql_root_password" -e "
+    SET PASSWORD FOR 'root'@'localhost' = PASSWORD('$mysql_root_password');
+    DELETE FROM mysql.user WHERE User='' OR (User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1'));
+    DROP DATABASE IF EXISTS test;
+    DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
+    FLUSH PRIVILEGES;
+" >> "$LOG_FILE" 2>&1
 if [ $? -ne 0 ]; then
-    log "Error: MariaDB secure installation failed."
+    log "Error: Failed to secure MariaDB with SQL commands."
     exit 1
 fi
 
