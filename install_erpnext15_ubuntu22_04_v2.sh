@@ -1,4 +1,3 @@
-```bash
 #!/bin/bash
 
 # Exit on error
@@ -590,4 +589,3 @@ if [ "$create_new_user" = "y" ] || [ "$create_new_user" = "Y" ]; then
     echo "Frappe user: $frappe_user"
     echo "Frappe user password: [hidden for security, use the password you provided]"
 fi
-```
