@@ -128,10 +128,12 @@ log "Node.js $node_version and Yarn $(yarn --version) installed or verified."
 # Step 4: Install wkhtmltopdf with patched Qt
 log "Checking for existing wkhtmltopdf installation..."
 if command_exists wkhtmltopdf; then
-    if wkhtmltopdf -V | grep -q "0.12.6.1 with patched qt"; then
+    wkhtmltopdf_version=$(wkhtmltopdf -V 2>&1 || true)
+    log "wkhtmltopdf version output: $wkhtmltopdf_version"
+    if echo "$wkhtmltopdf_version" | grep -q "0.12.6.1" && echo "$wkhtmltopdf_version" | grep -qi "patched qt"; then
         log "wkhtmltopdf 0.12.6.1 with patched Qt already installed, skipping installation."
     else
-        log "Error: wkhtmltopdf installed, but incorrect version. Required: 0.12.6.1 with patched Qt."
+        log "Error: wkhtmltopdf installed, but incorrect version. Required: 0.12.6.1 with patched Qt. Found: $wkhtmltopdf_version"
         exit 1
     fi
 else
@@ -145,10 +147,27 @@ else
         sudo apt-get install -f -y >> "$LOG_FILE" 2>&1 || { log "Error: Could not install wkhtmltopdf."; exit 1; }
     fi
     rm wkhtmltox.deb
-    if ! command_exists wkhtmltopdf || ! wkhtmltopdf -V | grep -q "0.12.6.1 with patched qt"; then
-        log "Error: wkhtmltopdf installation failed or incorrect version."
+    # Update PATH for wkhtmltopdf
+    export PATH=$PATH:/usr/local/bin:/usr/bin:/bin
+    if ! command_exists wkhtmltopdf; then
+        log "Error: wkhtmltopdf not found after installation. Checking alternative paths..."
+        if [ -f /usr/local/bin/wkhtmltopdf ]; then
+            log "wkhtmltopdf found in /usr/local/bin. Adding to PATH."
+            sudo ln -sf /usr/local/bin/wkhtmltopdf /usr/bin/wkhtmltopdf
+        else
+            log "Error: wkhtmltopdf not found in expected locations."
+            exit 1
+        fi
+    fi
+    wkhtmltopdf_version=$(wkhtmltopdf -V 2>&1 || true)
+    log "wkhtmltopdf version output: $wkhtmltopdf_version"
+    if ! echo "$wkhtmltopdf_version" | grep -q "0.12.6.1" || ! echo "$wkhtmltopdf_version" | grep -qi "patched qt"; then
+        log "Error: wkhtmltopdf installed, but incorrect version. Required: 0.12.6.1 with patched Qt. Found: $wkhtmltopdf_version"
         exit 1
     fi
+    # Ensure wkhtmltopdf is executable
+    sudo chmod +x /usr/local/bin/wkhtmltopdf 2>/dev/null || true
+    sudo chmod +x /usr/bin/wkhtmltopdf 2>/dev/null || true
 fi
 log "wkhtmltopdf 0.12.6.1 with patched Qt installed or verified."
 
