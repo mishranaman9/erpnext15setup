@@ -1,3 +1,4 @@
+```bash
 #!/bin/bash
 
 # Exit on error
@@ -46,13 +47,21 @@ if [ "$create_new_user" = "y" ] || [ "$create_new_user" = "Y" ]; then
     read -r frappe_user
     validate_input "$frappe_user"
     if id "$frappe_user" >/dev/null 2>&1; then
-        log "Error: User $frappe_user already exists."
-        exit 1
+        log "User $frappe_user already exists. Using existing user."
+        echo "Enter the password for existing user $frappe_user:"
+        read -s frappe_user_password
+        validate_input "$frappe_user_password"
+        echo
+        if ! groups "$frappe_user" | grep -q sudo; then
+            log "Adding $frappe_user to sudo group..."
+            sudo usermod -aG sudo "$frappe_user" >> "$LOG_FILE" 2>&1 || { log "Error: Failed to add $frappe_user to sudo group."; exit 1; }
+        fi
+    else
+        echo "Enter the password for new user $frappe_user:"
+        read -s frappe_user_password
+        validate_input "$frappe_user_password"
+        echo
     fi
-    echo "Enter the password for user $frappe_user:"
-    read -s frappe_user_password
-    validate_input "$frappe_user_password"
-    echo
 else
     frappe_user=$(whoami)
     log "Using current user $frappe_user for Frappe Bench setup."
@@ -80,7 +89,23 @@ validate_input "$site_name"
 # Check if port 80 is free
 check_port 80
 
-# Step 2: Update system packages
+# Step 2: Clean up existing configurations
+log "Cleaning up existing Frappe Bench and Nginx configurations..."
+if [ -d "/home/$frappe_user/frappe-bench" ]; then
+    sudo rm -rf "/home/$frappe_user/frappe-bench"
+    log "Removed existing Frappe Bench directory."
+fi
+if [ -f "/etc/nginx/sites-available/$site_name" ]; then
+    sudo rm -f "/etc/nginx/sites-available/$site_name"
+    sudo rm -f "/etc/nginx/sites-enabled/$site_name"
+    log "Removed existing Nginx configuration for $site_name."
+fi
+if [ -d "/home/$frappe_user/.bench" ]; then
+    sudo rm -rf "/home/$frappe_user/.bench"
+    log "Removed existing .bench directory."
+fi
+
+# Step 3: Update system packages
 log "Updating system packages..."
 if ! sudo apt-get update -y >> "$LOG_FILE" 2>&1; then
     log "Error: Failed to update package list. Check network connectivity or apt sources."
@@ -91,7 +116,7 @@ if ! sudo apt-get upgrade -y >> "$LOG_FILE" 2>&1; then
     sudo apt-get install -f -y >> "$LOG_FILE" 2>&1 || { log "Error: Could not fix dependencies."; exit 1; }
 fi
 
-# Step 3: Install Node.js 18
+# Step 4: Install Node.js 18
 log "Checking for existing Node.js installation..."
 if command_exists node; then
     node_version=$(node -v)
@@ -142,7 +167,7 @@ if ! command_exists yarn; then
 fi
 log "Node.js $node_version and Yarn $(yarn --version) installed or verified."
 
-# Step 4: Install wkhtmltopdf with patched Qt
+# Step 5: Install wkhtmltopdf with patched Qt
 log "Checking for existing wkhtmltopdf installation..."
 if command_exists wkhtmltopdf; then
     wkhtmltopdf_version=$(wkhtmltopdf -V 2>&1 || true)
@@ -186,7 +211,7 @@ else
 fi
 log "wkhtmltopdf 0.12.6.1 with patched Qt installed or verified."
 
-# Step 5: Install prerequisites
+# Step 6: Install prerequisites
 log "Installing prerequisites..."
 if ! sudo apt-get install -y \
     python3.10 python3.10-dev python3.10-venv python3-pip \
@@ -207,7 +232,7 @@ for cmd in python3.10 npm git redis-server nginx mariadb expect; do
 done
 log "Prerequisites verified."
 
-# Step 6: Configure MariaDB
+# Step 7: Configure MariaDB
 log "Configuring MariaDB..."
 if ! sudo systemctl is-active --quiet mariadb; then
     log "Error: MariaDB service is not running. Starting it..."
@@ -255,20 +280,26 @@ if ! sudo systemctl restart mariadb >> "$LOG_FILE" 2>&1; then
 fi
 log "MariaDB configured and running."
 
-# Step 7: Create Frappe Bench user
+# Step 8: Create Frappe Bench user
 if [ "$create_new_user" = "y" ] || [ "$create_new_user" = "Y" ]; then
-    log "Creating user $frappe_user..."
-    if ! sudo adduser --disabled-login --gecos "" "$frappe_user" >> "$LOG_FILE" 2>&1; then
-        log "Error: Failed to create user $frappe_user."
-        exit 1
+    if ! id "$frappe_user" >/dev/null 2>&1; then
+        log "Creating user $frappe_user..."
+        if ! sudo adduser --disabled-login --gecos "" "$frappe_user" >> "$LOG_FILE" 2>&1; then
+            log "Error: Failed to create user $frappe_user."
+            exit 1
+        fi
+        log "Setting password for user $frappe_user..."
+        echo "$frappe_user:$frappe_user_password" | sudo chpasswd >> "$LOG_FILE" 2>&1 || { log "Error: Failed to set password for $frappe_user."; exit 1; }
+        sudo usermod -aG sudo "$frappe_user"
     fi
-    log "Setting password for user $frappe_user..."
-    echo "$frappe_user:$frappe_user_password" | sudo chpasswd >> "$LOG_FILE" 2>&1 || { log "Error: Failed to set password for $frappe_user."; exit 1; }
-    sudo usermod -aG sudo "$frappe_user"
-    log "User $frappe_user created with sudo privileges."
+    # Configure sudoers for passwordless supervisorctl
+    log "Configuring sudoers for $frappe_user to run supervisorctl without password..."
+    echo "$frappe_user ALL=(ALL) NOPASSWD: /usr/bin/supervisorctl" | sudo tee /etc/sudoers.d/$frappe_user >> "$LOG_FILE" 2>&1
+    sudo chmod 0440 /etc/sudoers.d/$frappe_user
+    log "User $frappe_user verified or created with sudo privileges."
 fi
 
-# Step 8: Install Frappe Bench
+# Step 9: Install Frappe Bench
 log "Installing Frappe Bench..."
 if ! sudo pip3 install frappe-bench >> "$LOG_FILE" 2>&1; then
     log "Error: Failed to install frappe-bench. Updating pip..."
@@ -281,35 +312,28 @@ if ! command_exists bench; then
 fi
 log "Frappe Bench installed."
 
-# Step 9: Set up Frappe Bench and apps
+# Step 10: Set up Frappe Bench and apps
 log "Setting up Frappe Bench as $frappe_user..."
 if [ "$create_new_user" = "y" ] || [ "$create_new_user" = "Y" ]; then
-    # Use expect to handle sudo password prompts
+    # Use expect to handle sudo commands
     sudo expect -c "
+        set timeout -1
         spawn sudo -u $frappe_user bash
         expect \"{\\\$frappe_user@*}\"
         send \"cd /home/$frappe_user\\r\"
         expect \"{\\\$frappe_user@*}\"
         send \"bench init --frappe-branch version-15 frappe-bench\\r\"
-        expect {
-            \"{\\\$frappe_user@*}\" { send \"cd frappe-bench\\r\" }
-            eof { puts stderr \"Error: Failed to initialize Frappe Bench.\"; exit 1 }
-        }
+        expect \"{\\\$frappe_user@*}\"
+        send \"cd frappe-bench\\r\"
         expect \"{\\\$frappe_user@*}\"
         send \"yarn add less@4 stylus@0.63.0 vue-template-compiler@2.7.16\\r\"
         expect \"{\\\$frappe_user@*}\"
         send \"for i in 1 2 3; do yarn install --check-files && break || sleep 5; done\\r\"
-        expect {
-            \"{\\\$frappe_user@*}\" { }
-            eof { puts stderr \"Error: Failed to run yarn install.\"; exit 1 }
-        }
+        expect \"{\\\$frappe_user@*}\"
         send \"bench set-config -g developer_mode true\\r\"
         expect \"{\\\$frappe_user@*}\"
         send \"bench new-site $site_name --db-root-password \\\"$mysql_root_password\\\" --admin-password \\\"$admin_password\\\"\\r\"
-        expect {
-            \"{\\\$frappe_user@*}\" { }
-            eof { puts stderr \"Error: Failed to create site $site_name.\"; exit 1 }
-        }
+        expect \"{\\\$frappe_user@*}\"
         send \"bench get-app payments\\r\"
         expect \"{\\\$frappe_user@*}\"
         send \"bench get-app --branch version-15 erpnext\\r\"
@@ -393,10 +417,11 @@ else
 fi
 log "Frappe Bench and apps installed."
 
-# Step 10: Configure production setup
+# Step 11: Configure production setup
 log "Configuring production setup to serve on port 80..."
 if [ "$create_new_user" = "y" ] || [ "$create_new_user" = "Y" ]; then
     sudo expect -c "
+        set timeout -1
         spawn sudo -u $frappe_user bash
         expect \"{\\\$frappe_user@*}\"
         send \"cd /home/$frappe_user/frappe-bench\\r\"
@@ -418,7 +443,7 @@ else
     fi
 fi
 
-# Step 11: Ensure Nginx configuration for port 80
+# Step 12: Ensure Nginx configuration for port 80
 log "Configuring Nginx to serve on port 80..."
 sudo tee /etc/nginx/sites-available/$site_name > /dev/null <<EOF
 server {
@@ -428,13 +453,20 @@ server {
     client_max_body_size 20M;
 
     location / {
-        try_files /\$uri /\$uri/ /index.py;
-        rewrite ^(.*/assets/.*\\.(css|js|jpg|jpeg|gif|png|svg|ico))\$ /\$1 break;
+        try_files \$uri \$uri/ /index.py;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Host \$http_host;
+        proxy_pass http://127.0.0.1:8000;
+    }
+
+    location /assets/ {
+        try_files \$uri =404;
     }
 
     location /private/ {
         internal;
-        try_files /\$uri =404;
+        try_files \$uri =404;
     }
 
     location /socket.io {
@@ -443,13 +475,6 @@ server {
         proxy_set_header Connection "upgrade";
         proxy_set_header X-Frappe-Site-Name \$http_host;
         proxy_pass http://127.0.0.1:9000;
-    }
-
-    location / {
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header Host \$http_host;
-        proxy_pass http://127.0.0.1:8000;
     }
 }
 EOF
@@ -463,7 +488,7 @@ if ! sudo nginx -t >> "$LOG_FILE" 2>&1; then
 fi
 log "Nginx configured for port 80."
 
-# Step 12: Start services
+# Step 13: Start services
 log "Starting Nginx and Supervisor services..."
 if ! sudo systemctl enable nginx supervisor >> "$LOG_FILE" 2>&1; then
     log "Error: Failed to enable services."
@@ -483,7 +508,7 @@ if ! sudo systemctl is-active --quiet supervisor; then
 fi
 log "Services started successfully."
 
-# Step 13: Verify site on port 80
+# Step 14: Verify site on port 80
 log "Verifying ERPNext site on port 80..."
 sleep 5 # Wait for services to stabilize
 if curl -s "http://$site_name" | grep -q "ERPNext"; then
@@ -505,3 +530,4 @@ if [ "$create_new_user" = "y" ] || [ "$create_new_user" = "Y" ]; then
     echo "Frappe user: $frappe_user"
     echo "Frappe user password: [hidden for security, use the password you provided]"
 fi
+```
