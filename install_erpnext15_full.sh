@@ -16,7 +16,7 @@ validate_input() {
     fi
 }
 
-# === Step 1: User Prompts ===
+# === Step 1: Prompt User ===
 read -rp "Enter Frappe system user (e.g., frappe): " frappe_user
 validate_input "$frappe_user"
 
@@ -33,31 +33,28 @@ read -srp "Enter ERPNext Admin password: " admin_password; echo
 read -rp "Enter Site Name (e.g., erp.mysite.com): " site_name
 validate_input "$site_name"
 
-# === Step 2: System Update & Package Installation ===
-log "Installing system dependencies..."
+# === Step 2: Install Dependencies ===
+log "Installing dependencies..."
 sudo apt update -y
 sudo apt install -y software-properties-common apt-transport-https curl ca-certificates gnupg lsb-release
-
 sudo apt install -y python3.10 python3.10-dev python3.10-venv python3-pip git wget xvfb \
   libfontconfig libmysqlclient-dev libxrender1 libxext6 xfonts-75dpi redis-server nginx mariadb-server mariadb-client cron supervisor
 
-# === Step 3: Node.js and Yarn ===
-log "Installing Node.js and Yarn..."
+log "Installing Node.js 18 and Yarn..."
 curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
 sudo apt install -y nodejs
-sudo npm install -g yarn || {
+sudo npm install -g yarn || (
   curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add -
   echo "deb https://dl.yarnpkg.com/debian/ stable main" | sudo tee /etc/apt/sources.list.d/yarn.list
   sudo apt update && sudo apt install -y yarn
-}
+)
 
-# === Step 4: wkhtmltopdf (patched) ===
-log "Installing wkhtmltopdf..."
+log "Installing wkhtmltopdf (Qt patched)..."
 wget -O wkhtmltox.deb https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb
 sudo dpkg -i wkhtmltox.deb || sudo apt -f install -y
 rm wkhtmltox.deb
 
-# === Step 5: MariaDB Setup ===
+# === Step 3: MariaDB Setup ===
 log "Configuring MariaDB..."
 sudo mariadb-install-db --user=mysql --basedir=/usr --datadir=/var/lib/mysql
 sudo systemctl start mariadb
@@ -75,19 +72,19 @@ EOF
 
 sudo systemctl restart mariadb
 
-# === Step 6: Create System User ===
-log "Creating Linux user $frappe_user..."
+# === Step 4: Create Frappe User ===
+log "Creating user $frappe_user..."
 sudo adduser --disabled-password --gecos "" "$frappe_user"
 echo "$frappe_user:$frappe_user_pass" | sudo chpasswd
 sudo usermod -aG sudo "$frappe_user"
 echo 'export PATH=$PATH:/usr/local/bin' | sudo tee -a /home/$frappe_user/.bashrc
 
-# === Step 7: Install Bench CLI ===
+# === Step 5: Install Bench ===
 log "Installing Bench CLI..."
 sudo pip3 install --break-system-packages frappe-bench honcho
 
-# === Step 8: Generate and Execute ERPNext Setup Script ===
-log "Generating ERPNext setup script as $frappe_user..."
+# === Step 6: Generate ERPNext Setup Script and Set Permissions ===
+log "Generating ERPNext setup script..."
 cat <<EOSCRIPT | sudo tee /home/$frappe_user/setup_erpnext.sh > /dev/null
 #!/bin/bash
 export PATH=\$PATH:/usr/local/bin
@@ -107,16 +104,19 @@ bench setup nginx
 bench setup production $frappe_user
 EOSCRIPT
 
+# ✅ Immediately set permissions here (as per your request)
 sudo chmod +x /home/$frappe_user/setup_erpnext.sh
 sudo chown $frappe_user:$frappe_user /home/$frappe_user/setup_erpnext.sh
 
+# === Step 7: Execute Setup Script as User ===
 log "Running ERPNext setup script..."
-sudo -u $frappe_user env PATH=/usr/local/bin:\$PATH bash /home/$frappe_user/setup_erpnext.sh
+sudo -u "$frappe_user" bash -c "bash ~/setup_erpnext.sh"
 
 sudo systemctl restart nginx supervisor
 
-log "🎉 ERPNext 15 installed successfully!"
-echo "🌐 URL: http://$site_name"
-echo "👤 Admin User: Administrator"
+# === DONE ===
+log "🎉 ERPNext 15 installation complete!"
+echo "🌐 Access: http://$site_name"
+echo "👤 Admin Username: Administrator"
 echo "🔐 Admin Password: $admin_password"
-echo "📁 Bench path: /home/$frappe_user/frappe-bench"
+echo "📁 Bench Path: /home/$frappe_user/frappe-bench"
