@@ -79,11 +79,11 @@ echo "$frappe_user:$frappe_user_pass" | sudo chpasswd
 sudo usermod -aG sudo "$frappe_user"
 echo 'export PATH=$PATH:/usr/local/bin' | sudo tee -a /home/$frappe_user/.bashrc
 
-# === Step 5: Install Bench ===
+# === Step 5: Install Bench CLI ===
 log "Installing Bench CLI..."
 sudo pip3 install --break-system-packages frappe-bench honcho
 
-# === Step 6: Generate ERPNext Setup Script and Set Permissions ===
+# === Step 6: Generate ERPNext Setup Script and Fix Permissions ===
 log "Generating ERPNext setup script..."
 cat <<EOSCRIPT | sudo tee /home/$frappe_user/setup_erpnext.sh > /dev/null
 #!/bin/bash
@@ -104,19 +104,19 @@ bench setup nginx
 bench setup production $frappe_user
 EOSCRIPT
 
-# ✅ Immediately set permissions here (as per your request)
+# Set permissions immediately
 sudo chmod +x /home/$frappe_user/setup_erpnext.sh
 sudo chown $frappe_user:$frappe_user /home/$frappe_user/setup_erpnext.sh
 
-# === Step 7: Execute Setup Script as User ===
-log "Running ERPNext setup script..."
-sudo -u "$frappe_user" bash -c "bash ~/setup_erpnext.sh"
+# === Step 7: Execute Setup Script with Login Shell (PATH fix) ===
+log "Running ERPNext setup script with login shell..."
+sudo -u "$frappe_user" bash -lc "~/setup_erpnext.sh"
 
 sudo systemctl restart nginx supervisor
 
 # === DONE ===
 log "🎉 ERPNext 15 installation complete!"
-echo "🌐 Access: http://$site_name"
+echo "🌐 Visit: http://$site_name"
 echo "👤 Admin Username: Administrator"
 echo "🔐 Admin Password: $admin_password"
 echo "📁 Bench Path: /home/$frappe_user/frappe-bench"
