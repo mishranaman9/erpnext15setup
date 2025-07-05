@@ -33,31 +33,32 @@ read -srp "Enter ERPNext Admin password: " admin_password; echo
 read -rp "Enter Site Name (e.g., erp.mysite.com): " site_name
 validate_input "$site_name"
 
-# === Step 2: Update & Install Essentials ===
-log "Updating APT and installing essentials..."
-sudo apt-get update -y
-sudo apt-get install -y software-properties-common apt-transport-https curl ca-certificates gnupg lsb-release
+# === Step 2: System Update & Package Installation ===
+log "Installing system dependencies..."
+sudo apt update -y
+sudo apt install -y software-properties-common apt-transport-https curl ca-certificates gnupg lsb-release
 
-log "Installing dependencies..."
-sudo apt-get install -y python3.10 python3.10-dev python3.10-venv python3-pip git wget xvfb libfontconfig libmysqlclient-dev libxrender1 libxext6 xfonts-75dpi redis-server nginx mariadb-server mariadb-client cron supervisor
+sudo apt install -y python3.10 python3.10-dev python3.10-venv python3-pip git wget xvfb \
+  libfontconfig libmysqlclient-dev libxrender1 libxext6 xfonts-75dpi redis-server nginx mariadb-server mariadb-client cron supervisor
 
-log "Installing Node.js 18..."
+# === Step 3: Node.js and Yarn ===
+log "Installing Node.js and Yarn..."
 curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-sudo apt-get install -y nodejs
-sudo npm install -g yarn || (
+sudo apt install -y nodejs
+sudo npm install -g yarn || {
   curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add -
   echo "deb https://dl.yarnpkg.com/debian/ stable main" | sudo tee /etc/apt/sources.list.d/yarn.list
-  sudo apt-get update
-  sudo apt-get install -y yarn
-)
+  sudo apt update && sudo apt install -y yarn
+}
 
+# === Step 4: wkhtmltopdf (patched) ===
 log "Installing wkhtmltopdf..."
 wget -O wkhtmltox.deb https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb
-sudo dpkg -i wkhtmltox.deb || sudo apt-get install -f -y
+sudo dpkg -i wkhtmltox.deb || sudo apt -f install -y
 rm wkhtmltox.deb
 
-# === Step 3: MariaDB Setup ===
-log "Initializing MariaDB..."
+# === Step 5: MariaDB Setup ===
+log "Configuring MariaDB..."
 sudo mariadb-install-db --user=mysql --basedir=/usr --datadir=/var/lib/mysql
 sudo systemctl start mariadb
 sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$mysql_root_password'; FLUSH PRIVILEGES;"
@@ -74,21 +75,22 @@ EOF
 
 sudo systemctl restart mariadb
 
-# === Step 4: Create Frappe System User ===
+# === Step 6: Create System User ===
 log "Creating Linux user $frappe_user..."
 sudo adduser --disabled-password --gecos "" "$frappe_user"
 echo "$frappe_user:$frappe_user_pass" | sudo chpasswd
 sudo usermod -aG sudo "$frappe_user"
 echo 'export PATH=$PATH:/usr/local/bin' | sudo tee -a /home/$frappe_user/.bashrc
 
-# === Step 5: Install Bench CLI ===
+# === Step 7: Install Bench CLI ===
 log "Installing Bench CLI..."
 sudo pip3 install --break-system-packages frappe-bench honcho
-export PATH=$PATH:/usr/local/bin
 
-# === Step 6: Setup ERPNext ===
-log "Setting up ERPNext for user $frappe_user..."
-sudo -u "$frappe_user" env PATH=$PATH:/usr/local/bin bash <<EOF
+# === Step 8: Generate and Execute ERPNext Setup Script ===
+log "Generating ERPNext setup script as $frappe_user..."
+cat <<EOSCRIPT | sudo tee /home/$frappe_user/setup_erpnext.sh > /dev/null
+#!/bin/bash
+export PATH=\$PATH:/usr/local/bin
 cd /home/$frappe_user
 bench init --frappe-branch version-15 frappe-bench
 cd frappe-bench
@@ -103,12 +105,18 @@ bench --site $site_name install-app chat
 bench set-nginx-port $site_name 80
 bench setup nginx
 bench setup production $frappe_user
-EOF
+EOSCRIPT
+
+sudo chmod +x /home/$frappe_user/setup_erpnext.sh
+sudo chown $frappe_user:$frappe_user /home/$frappe_user/setup_erpnext.sh
+
+log "Running ERPNext setup script..."
+sudo -u $frappe_user env PATH=/usr/local/bin:\$PATH bash /home/$frappe_user/setup_erpnext.sh
 
 sudo systemctl restart nginx supervisor
 
-log "🎉 ERPNext 15 installed successfully at http://$site_name"
-echo "🔐 Admin Username: Administrator"
+log "🎉 ERPNext 15 installed successfully!"
+echo "🌐 URL: http://$site_name"
+echo "👤 Admin User: Administrator"
 echo "🔐 Admin Password: $admin_password"
-echo "👤 Linux user: $frappe_user (password hidden)"
 echo "📁 Bench path: /home/$frappe_user/frappe-bench"
