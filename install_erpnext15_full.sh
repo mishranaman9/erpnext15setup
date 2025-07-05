@@ -88,8 +88,7 @@ export PATH=$PATH:/usr/local/bin
 
 # === Step 6: Setup ERPNext ===
 log "Setting up ERPNext for user $frappe_user..."
-sudo -u "$frappe_user" bash <<EOF
-export PATH=\$PATH:/usr/local/bin
+sudo -u "$frappe_user" env PATH=$PATH:/usr/local/bin bash <<EOF
 cd /home/$frappe_user
 bench init --frappe-branch version-15 frappe-bench
 cd frappe-bench
