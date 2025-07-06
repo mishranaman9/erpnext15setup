@@ -30,10 +30,14 @@ fi
 
 read -srp "Enter MySQL root password to set: " mysql_root_password; echo
 read -srp "Enter ERPNext Admin password: " admin_password; echo
-read -rp "Enter Site Name (e.g., erp.mysite.com): " site_name
+read -rp "Enter Site Name (e.g., site1.local): " site_name
 validate_input "$site_name"
 
-# === Step 2: System Preparation ===
+# === Step 2: Get VM IP ===
+VM_IP=$(hostname -I | awk '{print $1}')
+log "Detected VM IP: $VM_IP"
+
+# === Step 3: Install Dependencies ===
 log "Installing dependencies..."
 sudo apt update -y
 sudo apt install -y software-properties-common apt-transport-https curl ca-certificates gnupg lsb-release
@@ -53,8 +57,8 @@ wget -O wkhtmltox.deb https://github.com/wkhtmltopdf/packaging/releases/download
 sudo dpkg -i wkhtmltox.deb || sudo apt -f install -y
 rm wkhtmltox.deb
 
-# === Step 3: MariaDB Setup ===
-log "Setting up MariaDB..."
+# === Step 4: MariaDB Setup ===
+log "Configuring MariaDB..."
 sudo mariadb-install-db --user=mysql --basedir=/usr --datadir=/var/lib/mysql
 sudo systemctl start mariadb
 sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$mysql_root_password'; FLUSH PRIVILEGES;"
@@ -71,19 +75,19 @@ EOF
 
 sudo systemctl restart mariadb
 
-# === Step 4: Create Frappe System User ===
+# === Step 5: Create Frappe System User ===
 log "Creating system user: $frappe_user"
 sudo adduser --disabled-password --gecos "" "$frappe_user"
 echo "$frappe_user:$frappe_user_pass" | sudo chpasswd
 sudo usermod -aG sudo "$frappe_user"
 echo 'export PATH=$PATH:/usr/local/bin' | sudo tee -a /home/$frappe_user/.bashrc
 
-# === Step 5: Install Bench CLI ===
+# === Step 6: Install Bench CLI ===
 log "Installing Bench CLI..."
 sudo pip3 install --break-system-packages frappe-bench honcho
 
-# === Step 6: Generate ERPNext Setup Script (user context only) ===
-log "Generating ERPNext setup script for user $frappe_user..."
+# === Step 7: Generate ERPNext Setup Script for Frappe User ===
+log "Generating ERPNext setup script..."
 cat <<EOSCRIPT | sudo tee /home/$frappe_user/setup_erpnext.sh > /dev/null
 #!/bin/bash
 export PATH=\$PATH:/usr/local/bin
@@ -104,18 +108,21 @@ EOSCRIPT
 sudo chmod +x /home/$frappe_user/setup_erpnext.sh
 sudo chown $frappe_user:$frappe_user /home/$frappe_user/setup_erpnext.sh
 
-# === Step 7: Execute User Script ===
-log "Running ERPNext setup script as $frappe_user..."
+# === Step 8: Run ERPNext Setup as Frappe User ===
+log "Running ERPNext setup script..."
 sudo -u "$frappe_user" bash -lc "~/setup_erpnext.sh"
 
-# === Step 8: Apply NGINX Setup as root ===
-log "Setting up NGINX configuration..."
-sudo -H -u "$frappe_user" bash -c "cd /home/$frappe_user/frappe-bench && bench setup nginx"
+# === Step 9: Apply and Patch NGINX Config with IP ===
+log "Patching NGINX config with detected IP $VM_IP..."
+sudo -H -u "$frappe_user" bash -c "cd ~/frappe-bench && bench setup nginx"
+sudo sed -i "s/server_name .*/server_name $VM_IP;/" /home/$frappe_user/frappe-bench/config/nginx.conf
+sudo cp /home/$frappe_user/frappe-bench/config/nginx.conf /etc/nginx/conf.d/frappe.conf
 
+# === Step 10: Restart Services ===
 sudo systemctl restart nginx supervisor
 
 log "🎉 ERPNext 15 installation complete!"
-echo "🌐 Visit: http://$site_name"
-echo "👤 Admin User: Administrator"
+echo "🌐 Visit: http://$VM_IP"
+echo "👤 Admin Username: Administrator"
 echo "🔐 Admin Password: $admin_password"
 echo "📁 Bench Path: /home/$frappe_user/frappe-bench"
