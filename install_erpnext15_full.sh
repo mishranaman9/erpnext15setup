@@ -16,7 +16,7 @@ validate_input() {
     fi
 }
 
-# === Step 1: Prompt User ===
+# === Step 1: User Prompts ===
 read -rp "Enter Frappe system user (e.g., frappe): " frappe_user
 validate_input "$frappe_user"
 
@@ -33,12 +33,11 @@ read -srp "Enter ERPNext Admin password: " admin_password; echo
 read -rp "Enter Site Name (e.g., erp.mysite.com): " site_name
 validate_input "$site_name"
 
-# === Step 2: Install Dependencies ===
+# === Step 2: System Preparation ===
 log "Installing dependencies..."
 sudo apt update -y
 sudo apt install -y software-properties-common apt-transport-https curl ca-certificates gnupg lsb-release
-sudo apt install -y python3.10 python3.10-dev python3.10-venv python3-pip git wget xvfb \
-  libfontconfig libmysqlclient-dev libxrender1 libxext6 xfonts-75dpi redis-server nginx mariadb-server mariadb-client cron supervisor
+sudo apt install -y python3.10 python3.10-dev python3.10-venv python3-pip git wget xvfb   libfontconfig libmysqlclient-dev libxrender1 libxext6 xfonts-75dpi redis-server nginx mariadb-server mariadb-client cron supervisor
 
 log "Installing Node.js 18 and Yarn..."
 curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
@@ -55,7 +54,7 @@ sudo dpkg -i wkhtmltox.deb || sudo apt -f install -y
 rm wkhtmltox.deb
 
 # === Step 3: MariaDB Setup ===
-log "Configuring MariaDB..."
+log "Setting up MariaDB..."
 sudo mariadb-install-db --user=mysql --basedir=/usr --datadir=/var/lib/mysql
 sudo systemctl start mariadb
 sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$mysql_root_password'; FLUSH PRIVILEGES;"
@@ -72,8 +71,8 @@ EOF
 
 sudo systemctl restart mariadb
 
-# === Step 4: Create Frappe User ===
-log "Creating user $frappe_user..."
+# === Step 4: Create Frappe System User ===
+log "Creating system user: $frappe_user"
 sudo adduser --disabled-password --gecos "" "$frappe_user"
 echo "$frappe_user:$frappe_user_pass" | sudo chpasswd
 sudo usermod -aG sudo "$frappe_user"
@@ -83,8 +82,8 @@ echo 'export PATH=$PATH:/usr/local/bin' | sudo tee -a /home/$frappe_user/.bashrc
 log "Installing Bench CLI..."
 sudo pip3 install --break-system-packages frappe-bench honcho
 
-# === Step 6: Generate ERPNext Setup Script and Fix Permissions ===
-log "Generating ERPNext setup script..."
+# === Step 6: Generate ERPNext Setup Script (user context only) ===
+log "Generating ERPNext setup script for user $frappe_user..."
 cat <<EOSCRIPT | sudo tee /home/$frappe_user/setup_erpnext.sh > /dev/null
 #!/bin/bash
 export PATH=\$PATH:/usr/local/bin
@@ -100,23 +99,23 @@ bench --site $site_name install-app erpnext
 bench --site $site_name install-app hrms
 bench --site $site_name install-app chat
 bench set-nginx-port $site_name 80
-bench setup nginx
-bench setup production $frappe_user
 EOSCRIPT
 
-# Set permissions immediately
 sudo chmod +x /home/$frappe_user/setup_erpnext.sh
 sudo chown $frappe_user:$frappe_user /home/$frappe_user/setup_erpnext.sh
 
-# === Step 7: Execute Setup Script with Login Shell (PATH fix) ===
-log "Running ERPNext setup script with login shell..."
+# === Step 7: Execute User Script ===
+log "Running ERPNext setup script as $frappe_user..."
 sudo -u "$frappe_user" bash -lc "~/setup_erpnext.sh"
+
+# === Step 8: Apply NGINX Setup as root ===
+log "Setting up NGINX configuration..."
+sudo -H -u "$frappe_user" bash -c "cd /home/$frappe_user/frappe-bench && bench setup nginx"
 
 sudo systemctl restart nginx supervisor
 
-# === DONE ===
 log "🎉 ERPNext 15 installation complete!"
 echo "🌐 Visit: http://$site_name"
-echo "👤 Admin Username: Administrator"
+echo "👤 Admin User: Administrator"
 echo "🔐 Admin Password: $admin_password"
 echo "📁 Bench Path: /home/$frappe_user/frappe-bench"
